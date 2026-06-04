@@ -1,0 +1,17 @@
+{
+  "lockfile_version": "1",
+  "packages": {
+    "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb#elixir": {
+      "last_modified": "1970-01-01T00:00:00Z",
+      "resolved": "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb#elixir"
+    },
+    "github:NixOS/nixpkgs/ffa10e26ae11d676b2db836259889f1f571cb14f#erlang_27": {
+      "last_modified": "1970-01-01T00:00:00Z",
+      "resolved": "github:NixOS/nixpkgs/ffa10e26ae11d676b2db836259889f1f571cb14f#erlang_27"
+    },
+    "github:NixOS/nixpkgs/nixpkgs-unstable": {
+      "last_modified": "2026-05-12T10:12:15Z",
+      "resolved": "github:NixOS/nixpkgs/48d91f2c0ce7b9e589f967d4f685153dd765dcdd?lastModified=1778580735&narHash=sha256-t%2B8AVV8ExvOmslz2sLIgw%2FhJBKlyl65rJvxjvvjHgpE%3D"
+    }
+  }
+}

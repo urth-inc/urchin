@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.2/.schema/devbox.schema.json",
+  "packages": [
+    "github:NixOS/nixpkgs/ffa10e26ae11d676b2db836259889f1f571cb14f#erlang_27",
+    "github:NixOS/nixpkgs/e6f23dc08d3624daab7094b701aa3954923c6bbb#elixir"
+  ],
+  "env": {
+    "MIX_HOME": "$PWD/.devbox/mix",
+    "HEX_HOME": "$PWD/.devbox/hex"
+  },
+  "shell": {
+    "init_hook": [
+      "mix local.hex --if-missing --force",
+      "mix local.rebar --if-missing --force"
+    ],
+    "scripts": {
+      "test": ["mix test"]
+    }
+  }
+}
