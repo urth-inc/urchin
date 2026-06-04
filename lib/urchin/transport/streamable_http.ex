@@ -20,6 +20,9 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:min_log_level` - default minimum log level for new sessions (default `"info"`)
     * `:request_timeout` - per-request handler timeout in ms (default `60_000`)
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
+    * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
+      every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
+      endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
 
   The plug reads the raw request body itself, so mount it before any JSON body parser.
   """
@@ -28,7 +31,7 @@ defmodule Urchin.Transport.StreamableHTTP do
 
   import Plug.Conn
 
-  alias Urchin.{Context, Dispatcher, Error, JSONRPC, Protocol, Session, SSE}
+  alias Urchin.{Auth, Context, Dispatcher, Error, JSONRPC, Protocol, Session, SSE}
 
   @session_header "mcp-session-id"
   @version_header "mcp-protocol-version"
@@ -49,17 +52,25 @@ defmodule Urchin.Transport.StreamableHTTP do
       allow_delete: Keyword.get(opts, :allow_delete, true),
       min_log_level: Keyword.get(opts, :min_log_level, "info"),
       request_timeout: Keyword.get(opts, :request_timeout, 60_000),
-      validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true)
+      validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
+      auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
 
   @impl true
   def call(conn, config) do
-    case validate_origin(conn, config) do
-      :ok -> route(conn, config)
+    with :ok <- validate_origin(conn, config),
+         {:ok, conn} <- authenticate(conn, config) do
+      route(conn, config)
+    else
       :forbidden -> send_error(conn, 403, nil, Error.invalid_request("Origin not allowed"))
+      {:sent, conn} -> conn
     end
   end
+
+  # When :auth is configured, every request must carry a valid bearer token; the
+  # validated claims ride along on the conn and are surfaced to handlers as ctx.auth.
+  defp authenticate(conn, %{auth: auth}), do: Auth.Plug.authenticate(conn, auth)
 
   defp route(%{method: "POST"} = conn, config), do: handle_post(conn, config)
   defp route(%{method: "GET"} = conn, config), do: handle_get(conn, config)
@@ -87,7 +98,7 @@ defmodule Urchin.Transport.StreamableHTTP do
 
   # The initialize handshake creates the session and is answered with a single JSON object.
   defp dispatch_post(conn, config, {:request, id, "initialize", params}) do
-    ctx = %Context{}
+    ctx = %Context{auth: conn_auth(conn)}
 
     case Dispatcher.initialize(config.server, params, ctx) do
       {:ok, result, meta} ->
@@ -165,6 +176,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       client_info: snapshot.client_info,
       client_capabilities: snapshot.client_capabilities,
       state: snapshot.server_state,
+      auth: conn_auth(conn),
       min_log_level: snapshot.min_log_level
     }
 
@@ -488,6 +500,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       _ -> nil
     end
   end
+
+  defp conn_auth(conn), do: Auth.Plug.fetch_claims(conn)
 
   ## Body + responses
 

@@ -9,6 +9,7 @@ specification over the **Streamable HTTP** transport.
 - Tools, resources, resource templates, prompts, completion and logging.
 - Server-initiated requests over SSE: sampling, elicitation and roots.
 - Progress notifications, cancellation, pagination and resumable SSE streams.
+- Optional OAuth 2.1 authorization: RFC 9728 discovery and pluggable token validation.
 
 > This library implements the server side only. The stdio transport is intentionally
 > not supported; only Streamable HTTP is provided.
@@ -198,6 +199,76 @@ end
 
 `Urchin.Context.list_roots/2` is also available.
 
+## Authorization (OAuth 2.1)
+
+Authorization is optional and off by default. When enabled, Urchin acts as an OAuth 2.1
+[Resource Server](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization):
+it validates inbound bearer tokens and advertises its authorization server through
+[RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) Protected Resource Metadata. The
+authorization server itself (token/authorization endpoints, PKCE, consent) is external and
+out of scope.
+
+Configure it with `Urchin.Auth.new!/1`. The `:token_validator` is the pluggable seam where
+you verify the token's signature/expiry/issuer (with your JWT or introspection library of
+choice) and return `Urchin.Auth.Claims`:
+
+```elixir
+defmodule Demo.Tokens do
+  @behaviour Urchin.Auth.TokenValidator
+
+  @impl true
+  def validate(token, _auth) do
+    case verify_jwt(token) do
+      {:ok, payload} -> {:ok, Urchin.Auth.Claims.from_map(payload)}
+      :error -> {:error, :invalid_token}
+    end
+  end
+end
+
+auth =
+  Urchin.Auth.new!(
+    # canonical server URI; also the expected token audience (RFC 8707)
+    resource: "https://mcp.example.com/mcp",
+    authorization_servers: ["https://auth.example.com"],
+    scopes_supported: ["mcp:tools", "files:read", "files:write"],
+    token_validator: Demo.Tokens
+  )
+```
+
+The standalone runner serves the discovery document for you, at
+`https://mcp.example.com/.well-known/oauth-protected-resource/mcp`:
+
+```elixir
+{:ok, _pid} = Urchin.start_link(Demo.Server, port: 4000, path: "/mcp", auth: auth)
+```
+
+When mounting the transport yourself, add `Urchin.Auth.Metadata` (serves discovery at the
+host root) and either pass `:auth` to the transport or use `Urchin.Auth.Plug`:
+
+```elixir
+# Plug.Router
+plug Urchin.Auth.Metadata, auth: auth
+forward "/mcp", to: Urchin.Transport.StreamableHTTP, init_opts: [server: Demo.Server, auth: auth]
+```
+
+Unauthenticated requests get a `401` with a `WWW-Authenticate: Bearer ..., resource_metadata="..."`
+challenge so clients can discover the authorization server; under-scoped tokens get a `403`
+`insufficient_scope`. The validated claims are available to handlers as `ctx.auth` for
+per-tool decisions:
+
+```elixir
+tool "delete", description: "Delete a file" do
+  if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "files:write") do
+    {:ok, [Urchin.Content.text("deleted")]}
+  else
+    {:error, "files:write scope required"}
+  end
+end
+```
+
+See `Urchin.Auth` for the full option list (audience validation, `required_scopes`, extra
+metadata fields).
+
 ## The behaviour
 
 For stateful servers or full control, implement `Urchin.Server` directly. All callbacks
@@ -246,6 +317,7 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:min_log_level` | `"info"` | default minimum log level for new sessions |
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
+| `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
 
@@ -261,6 +333,7 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | Logging | `logging/setLevel`, `notifications/message` |
 | Utilities | `ping`, `notifications/cancelled`, `notifications/progress`, pagination |
 | Server → client | `sampling/createMessage`, `elicitation/create`, `roots/list` |
+| Authorization | OAuth 2.1 resource server: RFC 9728 metadata discovery, `WWW-Authenticate` challenges, RFC 8707 audience binding (optional) |
 
 The transport implements: a single endpoint serving POST/GET/DELETE, the
 JSON-vs-SSE response decision, `202 Accepted` for notifications and responses,
@@ -271,17 +344,18 @@ stream.
 ### Not included
 
 - The stdio transport (out of scope by design).
-- OAuth 2.1 authorization is left to surrounding middleware; protect the endpoint with
-  your own auth plug and set `:allowed_origins` appropriately.
+- The OAuth 2.1 authorization server: Urchin is the resource server only. Token,
+  authorization and registration endpoints, PKCE and consent live in an external
+  authorization server.
 - Task-augmented execution (`tasks/*`) is not yet implemented; servers advertise no
   `tasks` capability.
 
 ## Security
 
 When exposing a server beyond localhost, configure `:allowed_origins`, bind to the
-intended interface via `:ip`, and place an authentication/authorization plug in front
-of the transport. The transport validates the `Origin` header (DNS-rebinding
-protection) and issues cryptographically random session ids by default.
+intended interface via `:ip`, and require authorization with `:auth` (see
+[Authorization](#authorization-oauth-21)). The transport validates the `Origin` header
+(DNS-rebinding protection) and issues cryptographically random session ids by default.
 
 ## License
 
