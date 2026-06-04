@@ -19,6 +19,10 @@ defmodule Urchin.Endpoint do
 
   Remaining options are forwarded to `Urchin.Transport.StreamableHTTP`. Requires the
   optional `:bandit` dependency.
+
+  When the forwarded `:auth` option is set, this endpoint also serves the OAuth 2.1
+  Protected Resource Metadata document (RFC 9728) at its well-known URI, so MCP clients
+  can discover the authorization server. See `Urchin.Auth`.
   """
 
   @behaviour Plug
@@ -49,19 +53,28 @@ defmodule Urchin.Endpoint do
   def init(opts) do
     path = Keyword.get(opts, :path, @default_path)
     transport_opts = Keyword.drop(opts, [:port, :ip, :scheme, :path, :name])
+    transport = Urchin.Transport.StreamableHTTP.init(transport_opts)
 
     %{
       path_info: path_to_segments(path),
-      transport: Urchin.Transport.StreamableHTTP.init(transport_opts)
+      transport: transport,
+      auth: transport.auth
     }
   end
 
   @impl true
-  def call(conn, %{path_info: path_info, transport: transport}) do
-    if conn.path_info == path_info do
-      Urchin.Transport.StreamableHTTP.call(conn, transport)
-    else
-      send_resp(conn, 404, "Not Found")
+  def call(conn, %{path_info: path_info, transport: transport, auth: auth}) do
+    cond do
+      # The MCP mount path cannot serve the root-relative discovery endpoint, so the
+      # runner answers it here when authorization is enabled.
+      auth && Urchin.Auth.Metadata.metadata_request?(conn, auth) ->
+        Urchin.Auth.Metadata.serve(conn, auth)
+
+      conn.path_info == path_info ->
+        Urchin.Transport.StreamableHTTP.call(conn, transport)
+
+      true ->
+        send_resp(conn, 404, "Not Found")
     end
   end
 

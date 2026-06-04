@@ -29,6 +29,7 @@ defmodule Urchin.Context do
     :client_capabilities,
     :state,
     :uri,
+    :auth,
     params: %{},
     assigns: %{},
     min_log_level: "debug",
@@ -45,6 +46,7 @@ defmodule Urchin.Context do
           client_capabilities: map() | nil,
           state: term(),
           uri: String.t() | nil,
+          auth: Urchin.Auth.Claims.t() | nil,
           params: map(),
           assigns: map(),
           min_log_level: String.t(),
@@ -56,6 +58,19 @@ defmodule Urchin.Context do
   @doc "Returns the user state established by `c:Urchin.Server.init/1`."
   @spec state(t()) :: term()
   def state(%__MODULE__{state: state}), do: state
+
+  @doc """
+  Returns the validated OAuth claims for the originating request, or `nil`.
+
+  Populated only when the transport is configured with `:auth` (or an upstream
+  `Urchin.Auth.Plug` ran). Handlers use it for per-tool authorization:
+
+      if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "files:write") do
+        # ...
+      end
+  """
+  @spec auth(t()) :: Urchin.Auth.Claims.t() | nil
+  def auth(%__MODULE__{auth: auth}), do: auth
 
   @doc "Stores a value in the context assigns."
   @spec assign(t(), atom(), term()) :: t()

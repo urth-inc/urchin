@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Optional OAuth 2.1 authorization (`Urchin.Auth`). Urchin can act as an OAuth 2.1
+  resource server: RFC 9728 Protected Resource Metadata discovery (served at the
+  well-known URI and advertised via `WWW-Authenticate: resource_metadata`), pluggable
+  token validation (`Urchin.Auth.TokenValidator`), RFC 8707 audience binding, scope
+  enforcement and `401`/`403`/`400` challenges. Enable it with the `:auth` option on the
+  transport, `Urchin.Endpoint` or `Urchin.start_link/2`, or compose the
+  `Urchin.Auth.Plug` and `Urchin.Auth.Metadata` plugs. Validated claims reach handlers as
+  `ctx.auth`. Authorization remains off by default.
+
 ## [0.1.0] - 2026-06-04
 
 Initial release: a Model Context Protocol (MCP) server library implementing the

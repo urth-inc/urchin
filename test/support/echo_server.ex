@@ -42,6 +42,21 @@ defmodule Urchin.Test.EchoServer do
     raise "kaboom"
   end
 
+  tool "whoami", description: "Reports the authenticated subject and scopes from ctx.auth" do
+    _ = args
+
+    text =
+      case Urchin.Context.auth(ctx) do
+        nil ->
+          "anonymous"
+
+        %Urchin.Auth.Claims{subject: subject, scopes: scopes} ->
+          "#{subject}:#{Enum.join(scopes, ",")}"
+      end
+
+    {:ok, [Urchin.Content.text(text)]}
+  end
+
   tool "progressive", description: "Emits a progress notification, then a result" do
     _ = args
     Urchin.Context.progress(ctx, 50, total: 100, message: "halfway")
