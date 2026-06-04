@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-06-04
+
+Initial release: a Model Context Protocol (MCP) server library implementing the
+`2025-11-25` specification over the Streamable HTTP transport.
+
+### Added
+
+- Server authoring via the `Urchin.Server` behaviour and a
+  `tool`/`resource`/`resource_template`/`prompt` DSL with automatic capability
+  derivation.
+- Tools, resources (plus templates and subscriptions), prompts, completion and
+  logging.
+- Server-initiated requests over SSE: sampling, elicitation and roots.
+- Progress notifications, cancellation, pagination and resumable SSE streams.
+- A mountable `Plug` (`Urchin.Transport.StreamableHTTP`) and a standalone Bandit
+  endpoint (`Urchin.Endpoint`, `Urchin.start_link/2`), plus `Urchin.broadcast/2`
+  for fan-out notifications.
+
+[0.1.0]: https://github.com/urth-inc/urchin/releases/tag/v0.1.0

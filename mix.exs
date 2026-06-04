@@ -46,16 +46,20 @@ defmodule Urchin.MixProject do
 
   defp package do
     [
+      maintainers: ["Urth Inc."],
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md LICENSE .formatter.exs)
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/develop/CHANGELOG.md"
+      },
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md"],
+      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
       source_ref: "v#{@version}"
     ]
   end
