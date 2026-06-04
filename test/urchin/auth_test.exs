@@ -70,6 +70,10 @@ defmodule Urchin.AuthTest do
         )
       end
     end
+
+    test "rejects a module that does not implement validate/2" do
+      assert_raise ArgumentError, ~r/validate\/2/, fn -> build(token_validator: Enum) end
+    end
   end
 
   describe "coerce!/1" do
@@ -176,6 +180,18 @@ defmodule Urchin.AuthTest do
       assert {:ok, %Claims{subject: "u1"}} = Auth.verify_token(build([]), "tok", [])
     end
 
+    test "a 2-arity function validator receives the auth and returns claims" do
+      auth =
+        build(
+          token_validator: fn _token, passed_auth ->
+            assert passed_auth.resource == "https://mcp.example.com/mcp"
+            {:ok, %Claims{subject: "u2", audience: ["https://mcp.example.com/mcp"]}}
+          end
+        )
+
+      assert {:ok, %Claims{subject: "u2"}} = Auth.verify_token(auth, "tok", [])
+    end
+
     test "validator rejection maps to invalid_token" do
       auth = build(token_validator: fn _ -> {:error, :invalid_token} end)
       assert {:error, :invalid_token, _} = Auth.verify_token(auth, "tok", [])
@@ -189,6 +205,12 @@ defmodule Urchin.AuthTest do
     test "an expired token (exp claim in the past) is rejected" do
       past = System.os_time(:second) - 100
       auth = build(token_validator: fn _ -> {:ok, %Claims{expires_at: past}} end)
+      assert {:error, :invalid_token, "Token has expired"} = Auth.verify_token(auth, "tok", [])
+    end
+
+    test "a token expiring exactly now is rejected" do
+      now = System.os_time(:second)
+      auth = build(token_validator: fn _ -> {:ok, %Claims{expires_at: now}} end)
       assert {:error, :invalid_token, "Token has expired"} = Auth.verify_token(auth, "tok", [])
     end
 

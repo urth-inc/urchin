@@ -17,7 +17,7 @@
 #             "params":{"protocolVersion":"2025-11-25","capabilities":{},
 #                       "clientInfo":{"name":"curl","version":"1"}}}'
 #
-# 3. Initialize with a bearer token (note the Mcp-Session-Id response header):
+# 3. Initialize with a bearer token (note the MCP-Session-Id response header):
 #
 #      curl -i -X POST http://127.0.0.1:4000/mcp \
 #        -H 'authorization: Bearer reader-token' \

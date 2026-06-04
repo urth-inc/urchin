@@ -306,7 +306,7 @@ defmodule Urchin.Auth do
   defp check_expiry(%Claims{expires_at: nil}), do: :ok
 
   defp check_expiry(%Claims{expires_at: exp}) when is_integer(exp) do
-    if exp < System.os_time(:second),
+    if exp <= System.os_time(:second),
       do: {:error, :invalid_token, "Token has expired"},
       else: :ok
   end
@@ -454,7 +454,15 @@ defmodule Urchin.Auth do
   defp validate_issuer!(other, _allow_insecure),
     do: raise(ArgumentError, "authorization server must be a string, got: #{inspect(other)}")
 
-  defp resolve_validator!(mod) when is_atom(mod) and not is_nil(mod), do: {:module, mod}
+  defp resolve_validator!(mod) when is_atom(mod) and not is_nil(mod) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :validate, 2) do
+      {:module, mod}
+    else
+      raise ArgumentError,
+            ":token_validator module must implement validate/2, got: #{inspect(mod)}"
+    end
+  end
+
   defp resolve_validator!(fun) when is_function(fun, 1), do: {:fun, fun, 1}
   defp resolve_validator!(fun) when is_function(fun, 2), do: {:fun, fun, 2}
 
