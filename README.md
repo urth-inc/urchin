@@ -272,6 +272,10 @@ tool "delete", description: "Delete a file", scopes: ["files:write"] do
 end
 ```
 
+A per-tool scope failure is returned as a JSON-RPC error from `tools/call`
+(`invalid_request`, with `data: %{required_scopes: [...]}`); transport-level
+authentication and scope failures remain HTTP `401`/`403`.
+
 Or check `ctx.auth` yourself for finer-grained decisions:
 
 ```elixir

@@ -22,6 +22,13 @@ and does not protect against, and what you must add before exposing a server pub
 - **Capability-gated server-initiated requests.** `sampling/createMessage`,
   `elicitation/create` and `roots/list` are only sent when the client advertised the
   capability.
+- **Declarative per-tool scopes.** `tool "name", scopes: [...]` enforces scopes against
+  `ctx.auth` before the handler runs, failing closed when the request carries no
+  authorization (only meaningful with `:auth` enabled).
+- **Opt-in argument validation.** `:validate_arguments` checks `tools/call` arguments
+  against each tool's `input_schema`. It is a minimal subset of JSON Schema (see
+  `Urchin.Schema`), so unsupported keywords and `output_schema` are still your handler's
+  responsibility.
 - **Bounded request bodies** (`@max_body`, ~8 MB) and a per-request handler timeout.
 
 ## What you must add before public exposure
@@ -37,10 +44,12 @@ Urchin does **not** yet provide these; supply them in your deployment:
 4. **Session lifecycle limits.** Idle timeout, max lifetime, and a cap on concurrent
    sessions / in-flight requests. Sessions persist until the client sends `DELETE`, so an
    unbounded public endpoint can be exhausted.
-5. **Per-tool authorization.** Read `ctx.auth` (scopes) in handlers, or gate tools you do
-   not want every authenticated caller to reach.
-6. **Input validation.** `input_schema` is advertised to clients but arguments are passed
-   to handlers as-is; validate them in the handler.
+5. **Per-tool authorization beyond scopes.** Declarative `scopes:` covers scope checks;
+   add app-specific authorization (ownership, tenancy, row-level access) in handlers via
+   `ctx.auth`.
+6. **Full input validation.** Enable `:validate_arguments` for structural checks, but
+   validate unsupported JSON Schema keywords, business rules and `output_schema` in your
+   handler — `Urchin.Schema` is a minimal subset.
 
 ## Deployment checklist
 

@@ -114,6 +114,9 @@ defmodule Urchin.DispatcherTest do
 
       assert {:ok, %{content: [%{type: "text", text: "classified"}], isError: false}} =
                call_secret(ctx)
+
+      # The handler signals execution via a message to the (inline) test process.
+      assert_received :secret_executed
     end
 
     test "denies when the granted scopes are insufficient" do
@@ -124,6 +127,17 @@ defmodule Urchin.DispatcherTest do
     test "denies (fail closed) when the request carries no authorization" do
       assert {:error, error} = call_secret(%Context{auth: nil})
       assert error.message =~ "scope"
+    end
+
+    test "a denied call never executes the handler" do
+      assert {:error, _} = call_secret(%Context{auth: %Claims{scopes: ["other"]}})
+      refute_received :secret_executed
+    end
+
+    test "scope denial has a stable error code and the required scopes in data" do
+      assert {:error, error} = call_secret(%Context{auth: %Claims{scopes: []}})
+      assert error.code == -32_600
+      assert error.data == %{required_scopes: ["secret:read"]}
     end
   end
 
@@ -150,6 +164,14 @@ defmodule Urchin.DispatcherTest do
 
       assert {:ok, %{isError: true}} =
                Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+    end
+
+    test "validates an omitted input_schema as an object" do
+      # A tool without an input_schema still must receive an object, not a bare value.
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "no_schema", "arguments" => "not-an-object"}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
     end
   end
 

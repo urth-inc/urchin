@@ -82,4 +82,41 @@ defmodule Urchin.SchemaTest do
       assert message =~ "1: expected integer"
     end
   end
+
+  describe "additionalProperties" do
+    test "rejects unexpected properties when additionalProperties is false" do
+      schema = %{
+        "type" => "object",
+        "properties" => %{"a" => %{"type" => "integer"}},
+        "additionalProperties" => false
+      }
+
+      assert Schema.validate(schema, %{"a" => 1}) == :ok
+      assert {:error, message} = Schema.validate(schema, %{"a" => 1, "b" => 2})
+      assert message =~ "unexpected property"
+      assert message =~ "b"
+    end
+
+    test "a no-parameter object schema rejects any argument" do
+      schema = %{"type" => "object", "additionalProperties" => false}
+      assert Schema.validate(schema, %{}) == :ok
+      assert {:error, _} = Schema.validate(schema, %{"x" => 1})
+    end
+
+    test "allows extra properties by default (additionalProperties absent)" do
+      schema = %{"type" => "object", "properties" => %{"a" => %{"type" => "integer"}}}
+      assert Schema.validate(schema, %{"a" => 1, "b" => 2}) == :ok
+    end
+  end
+
+  describe "atom-keyed schemas" do
+    test "validates atom-keyed schema keywords rather than silently accepting" do
+      schema = %{type: "object", properties: %{"a" => %{type: "integer"}}, required: ["a"]}
+      assert Schema.validate(schema, %{"a" => 1}) == :ok
+      assert {:error, message} = Schema.validate(schema, %{"a" => "x"})
+      assert message =~ "a: expected integer"
+      assert {:error, missing} = Schema.validate(schema, %{})
+      assert missing =~ "required"
+    end
+  end
 end

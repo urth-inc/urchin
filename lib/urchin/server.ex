@@ -411,7 +411,10 @@ defmodule Urchin.Server do
       :ok
     else
       {:error,
-       Urchin.Error.invalid_request("Insufficient scope; requires: " <> Enum.join(scopes, " "))}
+       Urchin.Error.invalid_request(
+         "Insufficient scope; requires: " <> Enum.join(scopes, " "),
+         %{required_scopes: scopes}
+       )}
     end
   end
 
@@ -421,7 +424,12 @@ defmodule Urchin.Server do
   def __validate_tool_args__(_name, _args, %Context{validate_arguments: false}, _tools), do: :ok
 
   def __validate_tool_args__(name, args, _ctx, tools) do
-    schema = Enum.find_value(tools, fn tool -> if tool.name == name, do: tool.input_schema end)
+    # Use the same effective schema the wire advertises: an omitted input_schema means an
+    # object, so validation is not silently skipped for a tool that declared no schema.
+    schema =
+      Enum.find_value(tools, fn tool ->
+        if tool.name == name, do: tool.input_schema || %{"type" => "object"}
+      end)
 
     case Urchin.Schema.validate(schema, args) do
       :ok -> :ok

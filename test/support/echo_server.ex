@@ -51,7 +51,14 @@ defmodule Urchin.Test.EchoServer do
     description: "Requires the secret:read scope",
     scopes: ["secret:read"] do
     _ = args
+    # Records that the handler ran so a test can assert a denied call never reaches it.
+    send(self(), :secret_executed)
     {:ok, [Urchin.Content.text("classified")]}
+  end
+
+  tool "no_schema", description: "Declares no input schema" do
+    _ = {args, ctx}
+    {:ok, [Urchin.Content.text("ok")]}
   end
 
   tool "whoami", description: "Reports the authenticated subject and scopes from ctx.auth" do
