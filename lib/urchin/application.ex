@@ -11,7 +11,9 @@ defmodule Urchin.Application do
       {DynamicSupervisor, strategy: :one_for_one, name: Urchin.Session.Supervisor}
     ]
 
-    opts = [strategy: :one_for_one, name: Urchin.Supervisor]
+    # :rest_for_one so that if the session Limiter crashes, the session supervisor (and its
+    # sessions) restart with it, keeping the cap count consistent rather than under-counting.
+    opts = [strategy: :rest_for_one, name: Urchin.Supervisor]
     Supervisor.start_link(children, opts)
   end
 end

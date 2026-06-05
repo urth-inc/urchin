@@ -47,4 +47,23 @@ defmodule Urchin.SessionLifecycleTest do
     assert Session.whereis(id) != nil
     Session.terminate(Session.whereis(id))
   end
+
+  test "idle termination closes the session's GET stream" do
+    {:ok, _id, pid} = start(idle_timeout: 50)
+    {:ok, _stream_id, _replay} = Session.register_general_stream(pid, self(), nil)
+    assert_receive :mcp_close, 1_000
+  end
+
+  test "max-lifetime termination closes the session's GET stream" do
+    {:ok, _id, pid} = start(max_lifetime: 50)
+    {:ok, _stream_id, _replay} = Session.register_general_stream(pid, self(), nil)
+    assert_receive :mcp_close, 1_000
+  end
+
+  test "DELETE closes the session's GET stream" do
+    {:ok, _id, pid} = start([])
+    {:ok, _stream_id, _replay} = Session.register_general_stream(pid, self(), nil)
+    Session.terminate(pid)
+    assert_receive :mcp_close, 1_000
+  end
 end

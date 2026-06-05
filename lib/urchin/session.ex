@@ -58,8 +58,12 @@ defmodule Urchin.Session do
   @doc "Terminates a session process."
   @spec terminate(pid()) :: :ok
   def terminate(pid) when is_pid(pid) do
-    DynamicSupervisor.terminate_child(@supervisor, pid)
-    :ok
+    # GenServer.stop (rather than terminating the supervisor child directly) guarantees the
+    # terminate/2 callback runs, which closes the session's GET stream. The session is a
+    # :temporary child, so the supervisor drops it once it exits.
+    GenServer.stop(pid, :normal)
+  catch
+    :exit, _ -> :ok
   end
 
   defp via(id), do: {:via, Registry, {@registry, id}}
@@ -310,6 +314,14 @@ defmodule Urchin.Session do
       :maps.filter(fn _id, {_caller, r} -> r != ref end, state.outbound)
 
     {:noreply, %{state | outbound: outbound}}
+  end
+
+  @impl true
+  def terminate(_reason, state) do
+    # However the session ends (idle, max-lifetime, DELETE, crash), close the GET ("general")
+    # SSE stream so its HTTP connection is not left looping after the session is gone.
+    if state.general_owner, do: send(state.general_owner, :mcp_close)
+    :ok
   end
 
   # Records client activity for the idle check; the periodic :idle_check message reads it.
