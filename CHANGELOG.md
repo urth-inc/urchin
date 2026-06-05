@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `:expose_internal_errors` transport option (default `false`). Raised exceptions in
-  handlers are now logged in full but return a generic message to the client; enable the
-  option to surface exception messages in development.
+- `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
+  malformed handler returns are now logged in full but return a generic message to the
+  client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
+  values and `{:error, message}` returns still pass through unchanged.
 - Capability guards: `Urchin.Context.create_message/3`, `elicit/3` and `list_roots/2`
   return an error without contacting the client when it did not advertise the matching
   `sampling`/`elicitation`/`roots` capability.

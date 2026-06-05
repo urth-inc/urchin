@@ -81,6 +81,20 @@ defmodule Urchin.DispatcherTest do
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
       assert error.code == -32_602
     end
+
+    test "a non-binary handler error reason is redacted by default" do
+      params = %{"name" => "leaky", "arguments" => %{}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+      assert error.message == "Internal server error"
+      refute error.message =~ "secret"
+    end
+
+    test "a non-binary handler error reason is exposed when configured" do
+      params = %{"name" => "leaky", "arguments" => %{}}
+      ctx = %Context{expose_internal_errors: true}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.message =~ "postgres"
+    end
   end
 
   describe "resources" do

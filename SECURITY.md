@@ -14,8 +14,11 @@ and does not protect against, and what you must add before exposing a server pub
   validates bearer tokens on every request, enforces RFC 8707 audience binding (fail-closed
   for tokens with no audience), checks scopes, and serves RFC 9728 discovery. See
   `Urchin.Auth`. The authorization server itself is external and out of scope.
-- **Error redaction.** Raised exceptions are logged in full but not surfaced to clients;
-  `:expose_internal_errors` (default `false`) must be opted into for development.
+- **Error redaction.** Unexpected exceptions and malformed handler returns are logged in
+  full and replaced with a generic message before reaching clients (`:expose_internal_errors`,
+  default `false`, opts into the detail for development). Deliberate errors — `Urchin.Error`
+  values and `{:error, message}` returns — pass through unchanged, so keep secrets and
+  internals out of their `message`/`data`.
 - **Capability-gated server-initiated requests.** `sampling/createMessage`,
   `elicitation/create` and `roots/list` are only sent when the client advertised the
   capability.

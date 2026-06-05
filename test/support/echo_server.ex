@@ -42,6 +42,11 @@ defmodule Urchin.Test.EchoServer do
     raise "kaboom"
   end
 
+  tool "leaky", description: "Returns a non-binary error reason" do
+    _ = {args, ctx}
+    {:error, {:db, "postgres://secret@host"}}
+  end
+
   tool "whoami", description: "Reports the authenticated subject and scopes from ctx.auth" do
     _ = args
 

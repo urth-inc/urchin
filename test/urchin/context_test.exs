@@ -33,5 +33,17 @@ defmodule Urchin.ContextTest do
       assert {:error, %Error{message: message}} = Context.create_message(ctx, %{})
       assert message =~ "session"
     end
+
+    test "elicit proceeds past the guard once elicitation is advertised" do
+      ctx = %Context{client_capabilities: %{"elicitation" => %{}}, session: nil}
+      assert {:error, %Error{message: message}} = Context.elicit(ctx, %{})
+      assert message =~ "session"
+    end
+
+    test "list_roots proceeds past the guard once roots is advertised" do
+      ctx = %Context{client_capabilities: %{"roots" => %{}}, session: nil}
+      assert {:error, %Error{message: message}} = Context.list_roots(ctx)
+      assert message =~ "session"
+    end
   end
 end

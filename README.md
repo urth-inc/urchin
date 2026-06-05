@@ -31,7 +31,8 @@ Add `urchin` to your dependencies:
 ```elixir
 def deps do
   [
-    # The Hex badge above shows the latest version; `~> 0.2` accepts every later 0.x release.
+    # The Hex badge above shows the latest version. Pre-1.0 minor releases may include
+    # breaking changes; pin a minor (e.g. {:urchin, "~> 0.2.0"}) if you need stability.
     {:urchin, "~> 0.2"},
     # Required only for the standalone endpoint (Urchin.start_link / Urchin.Endpoint):
     {:bandit, "~> 1.6"}
@@ -362,9 +363,10 @@ stream.
 When exposing a server beyond localhost, configure `:allowed_origins`, bind to the
 intended interface via `:ip`, and require authorization with `:auth` (see
 [Authorization](#authorization-oauth-21)). The transport validates the `Origin` header
-(DNS-rebinding protection), issues cryptographically random session ids, keeps raised
-exception messages out of client responses (`:expose_internal_errors` is `false`), and
-only issues server-initiated requests for capabilities the client advertised.
+(DNS-rebinding protection), issues cryptographically random session ids, redacts
+unexpected exception and malformed-return messages by default (`:expose_internal_errors`
+is `false`), and only issues server-initiated requests for capabilities the client
+advertised.
 
 Session lifecycle limits (idle/TTL/max sessions) and rate limiting are not yet built in;
 add them in front of the transport for public deployments. See

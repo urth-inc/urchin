@@ -212,7 +212,7 @@ defmodule Urchin.Context do
     if is_map(caps) and Map.has_key?(caps, name) do
       :ok
     else
-      {:error, Error.method_not_found(~s(Client did not advertise the "#{name}" capability))}
+      {:error, Error.invalid_request(~s(Client did not advertise the "#{name}" capability))}
     end
   end
 

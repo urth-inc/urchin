@@ -448,17 +448,19 @@ defmodule Urchin.Transport.StreamableHTTP do
     Regex.match?(~r{^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$}i, origin)
   end
 
-  # POST bodies are a single JSON-RPC message. A present Content-Type must be
-  # application/json; a missing one is allowed (the JSON decode still guards the body).
+  # POST bodies are a single JSON-RPC message. A present Content-Type must be the
+  # application/json media type (parameters such as charset are allowed); a missing one is
+  # allowed (the JSON decode still guards the body).
   defp check_content_type(conn) do
     case get_req_header(conn, "content-type") do
       [] ->
         :ok
 
       [value | _] ->
-        if value |> String.downcase() |> String.contains?("application/json"),
-          do: :ok,
-          else: :unsupported_media_type
+        case Plug.Conn.Utils.media_type(value) do
+          {:ok, "application", "json", _params} -> :ok
+          _ -> :unsupported_media_type
+        end
     end
   end
 
