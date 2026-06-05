@@ -1,4 +1,4 @@
-# Run with: mix run --no-halt examples/calculator.exs
+# Run with: mix run examples/calculator.exs
 #
 # Then, from another shell, initialize a session:
 #
@@ -62,12 +62,11 @@ children = [
 {:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 IO.puts("Calculator MCP server listening on http://127.0.0.1:4000/mcp")
 
-# Block the script for as long as the supervised endpoint runs. mix run --no-halt keeps
-# the VM alive but not this process, and Supervisor.start_link links the tree to it, so
-# without blocking the script would exit and take the server down. Waiting on the
-# supervisor's :DOWN (rather than sleeping forever) exits cleanly if the tree ever stops.
+# Keep this process alive while the endpoint supervisor runs: Supervisor.start_link links
+# the tree to the caller, so blocking here is what keeps the server up. If the supervisor
+# goes down, exit with its reason and let `mix run` halt the VM.
 ref = Process.monitor(supervisor)
 
 receive do
-  {:DOWN, ^ref, :process, ^supervisor, _reason} -> :ok
+  {:DOWN, ^ref, :process, ^supervisor, reason} -> exit(reason)
 end

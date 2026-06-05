@@ -87,6 +87,10 @@ Supervisor.start_link(children, strategy: :one_for_one)
 
 The endpoint now speaks Streamable HTTP at `http://127.0.0.1:4000/mcp`.
 
+Both forms link the endpoint to the calling process. A long-running application keeps it
+alive through its supervision tree; in a one-off `mix run` script you must keep the calling
+process alive yourself (the examples block on the supervisor — see `examples/calculator.exs`).
+
 ## Mounting in Phoenix / Plug
 
 The transport is a plain `Plug`. Mount it before any body parser, since it reads the

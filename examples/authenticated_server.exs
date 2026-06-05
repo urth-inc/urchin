@@ -1,4 +1,4 @@
-# Run with: mix run --no-halt examples/authenticated_server.exs
+# Run with: mix run examples/authenticated_server.exs
 #
 # This example turns on OAuth 2.1 authorization. The token validator below is a
 # DEV-ONLY stub that accepts two hard-coded tokens; a real server would verify a JWT
@@ -115,12 +115,11 @@ children = [
 IO.puts("Authenticated Notes MCP server listening on http://127.0.0.1:4000/mcp")
 IO.puts("Discovery: http://127.0.0.1:4000/.well-known/oauth-protected-resource/mcp")
 
-# Block for as long as the supervised endpoint runs. mix run --no-halt keeps the VM alive
-# but not this process, and Supervisor.start_link links the tree to it, so without blocking
-# the script would exit and take the server down. Waiting on the supervisor's :DOWN (rather
-# than sleeping forever) exits cleanly if the tree ever stops.
+# Keep this process alive while the endpoint supervisor runs: Supervisor.start_link links
+# the tree to the caller, so blocking here is what keeps the server up. If the supervisor
+# goes down, exit with its reason and let `mix run` halt the VM.
 ref = Process.monitor(supervisor)
 
 receive do
-  {:DOWN, ^ref, :process, ^supervisor, _reason} -> :ok
+  {:DOWN, ^ref, :process, ^supervisor, reason} -> exit(reason)
 end
