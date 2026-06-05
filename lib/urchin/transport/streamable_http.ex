@@ -174,11 +174,25 @@ defmodule Urchin.Transport.StreamableHTTP do
            max_lifetime: config.session_max_lifetime
          ) do
       {:ok, session_id, pid} ->
-        Session.Limiter.assign(reservation, pid)
+        # Hand the reserved slot to the session. If the limiter no longer knows the
+        # reservation (e.g. it restarted since reserve/1), the session would be uncounted,
+        # so terminate it rather than admit a session outside the cap.
+        case Session.Limiter.assign(reservation, pid) do
+          :ok ->
+            conn
+            |> put_resp_header(@session_header, session_id)
+            |> send_json(200, JSONRPC.result(id, result))
 
-        conn
-        |> put_resp_header(@session_header, session_id)
-        |> send_json(200, JSONRPC.result(id, result))
+          {:error, :unknown_reservation} ->
+            Session.terminate(pid)
+
+            send_error(
+              conn,
+              500,
+              id,
+              Error.internal_error("Could not assign session reservation")
+            )
+        end
 
       {:error, reason} ->
         Session.Limiter.release(reservation)
