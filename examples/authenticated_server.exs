@@ -105,6 +105,22 @@ auth =
     token_validator: Notes.Tokens
   )
 
-{:ok, _pid} = Urchin.start_link(Notes, port: 4000, path: "/mcp", auth: auth)
+# This is the child spec you drop straight into your own application's supervision
+# tree. In a script we own it ourselves, so we start the supervisor and then block.
+children = [
+  {Urchin.Endpoint, server: Notes, port: 4000, path: "/mcp", auth: auth}
+]
+
+{:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 IO.puts("Authenticated Notes MCP server listening on http://127.0.0.1:4000/mcp")
 IO.puts("Discovery: http://127.0.0.1:4000/.well-known/oauth-protected-resource/mcp")
+
+# Block for as long as the supervised endpoint runs. mix run --no-halt keeps the VM alive
+# but not this process, and Supervisor.start_link links the tree to it, so without blocking
+# the script would exit and take the server down. Waiting on the supervisor's :DOWN (rather
+# than sleeping forever) exits cleanly if the tree ever stops.
+ref = Process.monitor(supervisor)
+
+receive do
+  {:DOWN, ^ref, :process, ^supervisor, _reason} -> :ok
+end
