@@ -15,7 +15,9 @@ defmodule Urchin.Session do
   an HTTP connection itself.
   """
 
-  use GenServer
+  # A session that ends (via DELETE, idle, max-lifetime or a crash) must stay ended rather
+  # than be resurrected by the supervisor under its old id.
+  use GenServer, restart: :temporary
 
   alias Urchin.{Error, JSONRPC, SSE}
 
@@ -25,16 +27,27 @@ defmodule Urchin.Session do
 
   ## Lifecycle
 
-  @doc "Starts a session under the session supervisor and returns its id and pid."
+  @doc """
+  Starts a session under the session supervisor and returns its id and pid.
+
+  Returns `{:error, :max_sessions}` when `:max_sessions` is set and the registry already
+  holds that many sessions.
+  """
   @spec start(keyword()) :: {:ok, String.t(), pid()} | {:error, term()}
   def start(opts) do
-    id = Keyword.get(opts, :id) || generate_id()
-    opts = Keyword.put(opts, :id, id)
+    {max_sessions, opts} = Keyword.pop(opts, :max_sessions)
 
-    case DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts}) do
-      {:ok, pid} -> {:ok, id, pid}
-      {:error, {:already_started, pid}} -> {:ok, id, pid}
-      other -> other
+    if max_sessions && Registry.count(@registry) >= max_sessions do
+      {:error, :max_sessions}
+    else
+      id = Keyword.get(opts, :id) || generate_id()
+      opts = Keyword.put(opts, :id, id)
+
+      case DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts}) do
+        {:ok, pid} -> {:ok, id, pid}
+        {:error, {:already_started, pid}} -> {:ok, id, pid}
+        other -> other
+      end
     end
   end
 
@@ -161,8 +174,20 @@ defmodule Urchin.Session do
       cancelled: MapSet.new(),
       outbound: %{},
       outbound_seq: 0,
-      post_seq: 0
+      post_seq: 0,
+      idle_timeout: Keyword.get(opts, :idle_timeout),
+      last_active: System.monotonic_time(:millisecond)
     }
+
+    # The idle check polls `last_active` (updated by `touch/1` on every client interaction);
+    # the max-lifetime cap fires once regardless of activity.
+    if is_integer(state.idle_timeout),
+      do: Process.send_after(self(), :idle_check, state.idle_timeout)
+
+    case Keyword.get(opts, :max_lifetime) do
+      ms when is_integer(ms) -> Process.send_after(self(), :max_lifetime, ms)
+      _ -> :ok
+    end
 
     {:ok, state}
   end
@@ -179,13 +204,13 @@ defmodule Urchin.Session do
       min_log_level: state.min_log_level
     }
 
-    {:reply, snapshot, state}
+    {:reply, snapshot, touch(state)}
   end
 
   def handle_call({:start_request, request_id, task_pid, owner_pid}, _from, state) do
     seq = state.post_seq + 1
     stream_id = "p" <> Integer.to_string(seq)
-    state = %{state | post_seq: seq}
+    state = touch(%{state | post_seq: seq})
 
     # If a cancellation for this id arrived before the request was registered, kill the
     # task immediately rather than letting it run unobserved.
@@ -231,7 +256,7 @@ defmodule Urchin.Session do
       end
 
     {:reply, {:ok, state.general_stream_id, replay},
-     %{state | general_owner: owner, general_ref: ref}}
+     touch(%{state | general_owner: owner, general_ref: ref})}
   end
 
   def handle_call(:subscriptions, _from, state), do: {:reply, state.subscriptions, state}
@@ -239,11 +264,11 @@ defmodule Urchin.Session do
   @impl true
   def handle_cast({:finish_request, request_id}, state) do
     {:noreply,
-     %{
+     touch(%{
        state
        | inflight: Map.delete(state.inflight, request_id),
          cancelled: MapSet.delete(state.cancelled, request_id)
-     }}
+     })}
   end
 
   def handle_cast({:cancel_outbound, id}, state) do
@@ -267,10 +292,25 @@ defmodule Urchin.Session do
   end
 
   def handle_cast({:client_message, message}, state) do
-    {:noreply, handle_client(message, state)}
+    {:noreply, touch(handle_client(message, state))}
   end
 
   @impl true
+  def handle_info(:idle_check, state) do
+    elapsed = System.monotonic_time(:millisecond) - state.last_active
+
+    cond do
+      # Never reap a session that is still serving a request; re-check later.
+      map_size(state.inflight) > 0 -> {:noreply, schedule_idle_check(state, state.idle_timeout)}
+      elapsed >= state.idle_timeout -> {:stop, :normal, state}
+      true -> {:noreply, schedule_idle_check(state, state.idle_timeout - elapsed)}
+    end
+  end
+
+  def handle_info(:max_lifetime, state) do
+    {:stop, :normal, state}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{general_ref: ref} = state) do
     {:noreply, %{state | general_owner: nil, general_ref: nil}}
   end
@@ -281,6 +321,14 @@ defmodule Urchin.Session do
       :maps.filter(fn _id, {_caller, r} -> r != ref end, state.outbound)
 
     {:noreply, %{state | outbound: outbound}}
+  end
+
+  # Records client activity for the idle check; the periodic :idle_check message reads it.
+  defp touch(state), do: %{state | last_active: System.monotonic_time(:millisecond)}
+
+  defp schedule_idle_check(state, after_ms) do
+    Process.send_after(self(), :idle_check, max(after_ms, 1))
+    state
   end
 
   ## Internal: client message handling

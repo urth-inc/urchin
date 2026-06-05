@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Session lifecycle limits: `:max_sessions` (reject new sessions with `503` past a cap),
+  `:session_idle_timeout` (terminate after inactivity; a session serving a request is not
+  reaped) and `:session_max_lifetime` (terminate a fixed time after creation). All default
+  to `nil` (unlimited). Session processes are now `restart: :temporary` so an ended session
+  is never resurrected under its old id.
 - Declarative tool scopes: `tool "name", scopes: ["files:write"], ...` enforces the scopes
   against `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization.

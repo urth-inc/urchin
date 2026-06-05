@@ -20,6 +20,12 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:min_log_level` - default minimum log level for new sessions (default `"info"`)
     * `:request_timeout` - per-request handler timeout in ms (default `60_000`)
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
+    * `:max_sessions` - reject new sessions with `503` once this many are active (default
+      `nil`, unlimited). The cap is across all sessions sharing the session registry.
+    * `:session_idle_timeout` - terminate a session after this many ms without client
+      activity (default `nil`, never). A session serving a request is not reaped.
+    * `:session_max_lifetime` - terminate a session this many ms after it was created,
+      regardless of activity (default `nil`, never)
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
     * `:validate_arguments` - validate `tools/call` arguments against each tool's
@@ -60,6 +66,9 @@ defmodule Urchin.Transport.StreamableHTTP do
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       validate_arguments: Keyword.get(opts, :validate_arguments, false),
+      max_sessions: Keyword.get(opts, :max_sessions),
+      session_idle_timeout: Keyword.get(opts, :session_idle_timeout),
+      session_max_lifetime: Keyword.get(opts, :session_max_lifetime),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -120,19 +129,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       {:ok, result, meta} ->
         case init_server_state(config) do
           {:ok, server_state} ->
-            {:ok, session_id, _pid} =
-              Session.start(
-                server: config.server,
-                server_state: server_state,
-                protocol_version: meta.protocol_version,
-                client_info: meta.client_info,
-                client_capabilities: meta.client_capabilities,
-                min_log_level: config.min_log_level
-              )
-
-            conn
-            |> put_resp_header(@session_header, session_id)
-            |> send_json(200, JSONRPC.result(id, result))
+            start_session(conn, config, id, result, meta, server_state)
 
           {:error, reason} ->
             send_error(
@@ -154,6 +151,36 @@ defmodule Urchin.Transport.StreamableHTTP do
       route_session_message(conn, config, session_pid, decoded)
     else
       {:error, status, error} -> send_error(conn, status, message_id(decoded), error)
+    end
+  end
+
+  defp start_session(conn, config, id, result, meta, server_state) do
+    case Session.start(
+           server: config.server,
+           server_state: server_state,
+           protocol_version: meta.protocol_version,
+           client_info: meta.client_info,
+           client_capabilities: meta.client_capabilities,
+           min_log_level: config.min_log_level,
+           max_sessions: config.max_sessions,
+           idle_timeout: config.session_idle_timeout,
+           max_lifetime: config.session_max_lifetime
+         ) do
+      {:ok, session_id, _pid} ->
+        conn
+        |> put_resp_header(@session_header, session_id)
+        |> send_json(200, JSONRPC.result(id, result))
+
+      {:error, :max_sessions} ->
+        send_error(conn, 503, id, Error.internal_error("Maximum number of sessions reached"))
+
+      {:error, reason} ->
+        send_error(
+          conn,
+          500,
+          id,
+          Error.internal_error("Could not start session: #{inspect(reason)}")
+        )
     end
   end
 
