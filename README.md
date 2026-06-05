@@ -341,9 +341,9 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
 | `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` (see `Urchin.Schema`) |
-| `:max_sessions` | `nil` | reject new sessions with `503` once this many are active (`nil` = unlimited) |
-| `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity (`nil` = never) |
-| `:session_max_lifetime` | `nil` | terminate a session this many ms after creation, regardless of activity (`nil` = never) |
+| `:max_sessions` | `nil` | reject new sessions with `503` past this many, atomically and before the server's `init/1` runs (`nil` = unlimited) |
+| `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity; a session serving a request is not reaped (`nil` = never) |
+| `:session_max_lifetime` | `nil` | terminate a session this many ms after creation regardless of activity; set above your longest tool run (`nil` = never) |
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.

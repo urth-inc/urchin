@@ -27,27 +27,16 @@ defmodule Urchin.Session do
 
   ## Lifecycle
 
-  @doc """
-  Starts a session under the session supervisor and returns its id and pid.
-
-  Returns `{:error, :max_sessions}` when `:max_sessions` is set and the registry already
-  holds that many sessions.
-  """
+  @doc "Starts a session under the session supervisor and returns its id and pid."
   @spec start(keyword()) :: {:ok, String.t(), pid()} | {:error, term()}
   def start(opts) do
-    {max_sessions, opts} = Keyword.pop(opts, :max_sessions)
+    id = Keyword.get(opts, :id) || generate_id()
+    opts = Keyword.put(opts, :id, id)
 
-    if max_sessions && Registry.count(@registry) >= max_sessions do
-      {:error, :max_sessions}
-    else
-      id = Keyword.get(opts, :id) || generate_id()
-      opts = Keyword.put(opts, :id, id)
-
-      case DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts}) do
-        {:ok, pid} -> {:ok, id, pid}
-        {:error, {:already_started, pid}} -> {:ok, id, pid}
-        other -> other
-      end
+    case DynamicSupervisor.start_child(@supervisor, {__MODULE__, opts}) do
+      {:ok, pid} -> {:ok, id, pid}
+      {:error, {:already_started, pid}} -> {:ok, id, pid}
+      other -> other
     end
   end
 

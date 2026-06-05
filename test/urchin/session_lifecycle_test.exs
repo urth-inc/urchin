@@ -47,11 +47,4 @@ defmodule Urchin.SessionLifecycleTest do
     assert Session.whereis(id) != nil
     Session.terminate(Session.whereis(id))
   end
-
-  test "max_sessions rejects new sessions beyond the cap" do
-    cap = Registry.count(Urchin.Session.Registry) + 1
-    {:ok, id, _pid} = start(max_sessions: cap)
-    assert {:error, :max_sessions} = start(max_sessions: cap)
-    Session.terminate(Session.whereis(id))
-  end
 end

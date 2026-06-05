@@ -7,6 +7,7 @@ defmodule Urchin.Application do
   def start(_type, _args) do
     children = [
       {Registry, keys: :unique, name: Urchin.Session.Registry},
+      Urchin.Session.Limiter,
       {DynamicSupervisor, strategy: :one_for_one, name: Urchin.Session.Supervisor}
     ]
 

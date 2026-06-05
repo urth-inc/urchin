@@ -21,11 +21,13 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:request_timeout` - per-request handler timeout in ms (default `60_000`)
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
     * `:max_sessions` - reject new sessions with `503` once this many are active (default
-      `nil`, unlimited). The cap is across all sessions sharing the session registry.
+      `nil`, unlimited). The cap is enforced atomically before the server's `init/1` runs,
+      and is global across all sessions in the app.
     * `:session_idle_timeout` - terminate a session after this many ms without client
       activity (default `nil`, never). A session serving a request is not reaped.
     * `:session_max_lifetime` - terminate a session this many ms after it was created,
-      regardless of activity (default `nil`, never)
+      regardless of activity (default `nil`, never). Set it above your longest expected
+      tool run, since it can expire a session mid-request.
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
     * `:validate_arguments` - validate `tools/call` arguments against each tool's
@@ -66,9 +68,9 @@ defmodule Urchin.Transport.StreamableHTTP do
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       validate_arguments: Keyword.get(opts, :validate_arguments, false),
-      max_sessions: Keyword.get(opts, :max_sessions),
-      session_idle_timeout: Keyword.get(opts, :session_idle_timeout),
-      session_max_lifetime: Keyword.get(opts, :session_max_lifetime),
+      max_sessions: positive_integer_opt!(opts, :max_sessions),
+      session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
+      session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -127,17 +129,27 @@ defmodule Urchin.Transport.StreamableHTTP do
 
     case Dispatcher.initialize(config.server, params, ctx) do
       {:ok, result, meta} ->
-        case init_server_state(config) do
-          {:ok, server_state} ->
-            start_session(conn, config, id, result, meta, server_state)
+        # Reserve a session slot before running the server's init/1, so a rejected session
+        # pays no init cost and the cap holds under concurrent initializes.
+        case Session.Limiter.reserve(config.max_sessions) do
+          {:ok, reservation} ->
+            case init_server_state(config) do
+              {:ok, server_state} ->
+                start_session(conn, config, id, result, meta, server_state, reservation)
 
-          {:error, reason} ->
-            send_error(
-              conn,
-              500,
-              id,
-              Error.internal_error("Server init failed: #{inspect(reason)}")
-            )
+              {:error, reason} ->
+                Session.Limiter.release(reservation)
+
+                send_error(
+                  conn,
+                  500,
+                  id,
+                  Error.internal_error("Server init failed: #{inspect(reason)}")
+                )
+            end
+
+          {:error, :max_sessions} ->
+            send_error(conn, 503, id, Error.internal_error("Maximum number of sessions reached"))
         end
 
       {:error, error} ->
@@ -154,7 +166,7 @@ defmodule Urchin.Transport.StreamableHTTP do
     end
   end
 
-  defp start_session(conn, config, id, result, meta, server_state) do
+  defp start_session(conn, config, id, result, meta, server_state, reservation) do
     case Session.start(
            server: config.server,
            server_state: server_state,
@@ -162,19 +174,19 @@ defmodule Urchin.Transport.StreamableHTTP do
            client_info: meta.client_info,
            client_capabilities: meta.client_capabilities,
            min_log_level: config.min_log_level,
-           max_sessions: config.max_sessions,
            idle_timeout: config.session_idle_timeout,
            max_lifetime: config.session_max_lifetime
          ) do
-      {:ok, session_id, _pid} ->
+      {:ok, session_id, pid} ->
+        Session.Limiter.assign(reservation, pid)
+
         conn
         |> put_resp_header(@session_header, session_id)
         |> send_json(200, JSONRPC.result(id, result))
 
-      {:error, :max_sessions} ->
-        send_error(conn, 503, id, Error.internal_error("Maximum number of sessions reached"))
-
       {:error, reason} ->
+        Session.Limiter.release(reservation)
+
         send_error(
           conn,
           500,
@@ -457,6 +469,22 @@ defmodule Urchin.Transport.StreamableHTTP do
       end
     else
       {:ok, nil}
+    end
+  end
+
+  # Session-limit options are positive millisecond/count values or nil; fail fast on a
+  # bad value (e.g. a negative timeout that would crash Process.send_after) at startup.
+  defp positive_integer_opt!(opts, key) do
+    case Keyword.get(opts, key) do
+      nil ->
+        nil
+
+      value when is_integer(value) and value > 0 ->
+        value
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(key)} must be a positive integer or nil, got: #{inspect(other)}"
     end
   end
 
