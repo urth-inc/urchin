@@ -166,6 +166,7 @@ defmodule Urchin.Server do
   defmacro tool(name, opts \\ [], do: block) do
     fname = handler_name("tool", name)
     {scopes, tool_opts} = Keyword.pop(opts, :scopes, [])
+    scopes = validate_scopes!(scopes)
 
     quote do
       @mcp_tools Urchin.Tool.new([{:name, unquote(name)} | unquote(tool_opts)])
@@ -235,6 +236,15 @@ defmodule Urchin.Server do
         unquote(block)
       end
     end
+  end
+
+  # Fails the compile on a clearly-wrong literal :scopes (e.g. a bare string). A non-literal
+  # expression (a variable or call) is a tuple here and is deferred to runtime.
+  defp validate_scopes!(scopes) when is_list(scopes), do: scopes
+  defp validate_scopes!(scopes) when is_tuple(scopes), do: scopes
+
+  defp validate_scopes!(other) do
+    raise ArgumentError, "tool :scopes must be a list of strings, got: #{inspect(other)}"
   end
 
   # Generates a deterministic private handler name. Determinism matters because Mix's

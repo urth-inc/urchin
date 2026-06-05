@@ -5,9 +5,9 @@ defmodule Urchin.Schema do
   This is a deliberately small subset of JSON Schema, sufficient to catch the common
   argument mistakes the DSL's `input_schema` describes, without pulling in a full
   validation dependency. It validates `type` (object, array, string, number, integer,
-  boolean, null), object `properties`, `required` and `additionalProperties: false`,
-  array `items`, and `enum`. Other keywords (`minLength`, `pattern`, `format`, ...) are
-  ignored rather than enforced.
+  boolean, null, and union types such as `["string", "null"]`), object `properties`,
+  `required` and `additionalProperties: false`, array `items`, and `enum`. Other keywords
+  (`minLength`, `pattern`, `format`, ...) are ignored rather than enforced.
 
   Schema keywords may be keyed by string or atom (so `%{"type" => "object"}` and
   `%{type: "object"}` both validate); the values being validated come from JSON and are
@@ -59,6 +59,13 @@ defmodule Urchin.Schema do
   defp check_type("null", nil, _path), do: :ok
   defp check_type("integer", value, _path) when is_integer(value), do: :ok
   defp check_type("number", value, _path) when is_number(value), do: :ok
+
+  # Union types, e.g. `type: ["string", "null"]`: the value must match at least one.
+  defp check_type(types, value, path) when is_list(types) do
+    if Enum.any?(types, fn type -> check_type(type, value, path) == :ok end),
+      do: :ok,
+      else: {:error, "#{at(path)}expected one of #{inspect(types)}, got #{inspect(value)}"}
+  end
 
   defp check_type(type, value, path),
     do: {:error, "#{at(path)}expected #{type}, got #{inspect(value)}"}

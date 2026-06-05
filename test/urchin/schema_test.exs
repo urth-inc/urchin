@@ -26,6 +26,14 @@ defmodule Urchin.SchemaTest do
       assert {:error, _} = Schema.validate(%{"type" => "integer"}, 1.5)
       assert Schema.validate(%{"type" => "number"}, 1) == :ok
     end
+
+    test "supports union types" do
+      schema = %{"type" => ["string", "null"]}
+      assert Schema.validate(schema, "x") == :ok
+      assert Schema.validate(schema, nil) == :ok
+      assert {:error, message} = Schema.validate(schema, 1)
+      assert message =~ "expected one of"
+    end
   end
 
   describe "objects" do

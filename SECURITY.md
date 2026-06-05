@@ -24,7 +24,8 @@ and does not protect against, and what you must add before exposing a server pub
   capability.
 - **Declarative per-tool scopes.** `tool "name", scopes: [...]` enforces scopes against
   `ctx.auth` before the handler runs, failing closed when the request carries no
-  authorization (only meaningful with `:auth` enabled).
+  authorization (only meaningful when `ctx.auth` is populated, typically by `:auth` or an
+  upstream `Urchin.Auth.Plug`).
 - **Opt-in argument validation.** `:validate_arguments` checks `tools/call` arguments
   against each tool's `input_schema`. It is a minimal subset of JSON Schema (see
   `Urchin.Schema`), so unsupported keywords and `output_schema` are still your handler's
