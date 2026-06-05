@@ -22,6 +22,9 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
+    * `:validate_arguments` - validate `tools/call` arguments against each tool's
+      `input_schema` (DSL tools) before the handler runs, rejecting a mismatch with
+      `invalid_params` (default `false`). See `Urchin.Schema` for the supported subset.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
@@ -56,6 +59,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       request_timeout: Keyword.get(opts, :request_timeout, 60_000),
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
+      validate_arguments: Keyword.get(opts, :validate_arguments, false),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -190,7 +194,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       state: snapshot.server_state,
       auth: conn_auth(conn),
       min_log_level: snapshot.min_log_level,
-      expose_internal_errors: config.expose_internal_errors
+      expose_internal_errors: config.expose_internal_errors,
+      validate_arguments: config.validate_arguments
     }
 
     {task_pid, task_ref} =

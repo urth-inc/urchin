@@ -97,6 +97,84 @@ defmodule Urchin.DispatcherTest do
     end
   end
 
+  describe "declarative tool scopes" do
+    alias Urchin.Auth.Claims
+
+    defp call_secret(ctx) do
+      Dispatcher.handle_request(
+        EchoServer,
+        "tools/call",
+        %{"name" => "secret", "arguments" => %{}},
+        ctx
+      )
+    end
+
+    test "runs the handler when the required scope is granted" do
+      ctx = %Context{auth: %Claims{scopes: ["secret:read"]}}
+
+      assert {:ok, %{content: [%{type: "text", text: "classified"}], isError: false}} =
+               call_secret(ctx)
+
+      # The handler signals execution via a message to the (inline) test process.
+      assert_received :secret_executed
+    end
+
+    test "denies when the granted scopes are insufficient" do
+      assert {:error, error} = call_secret(%Context{auth: %Claims{scopes: ["other"]}})
+      assert error.message =~ "scope"
+    end
+
+    test "denies (fail closed) when the request carries no authorization" do
+      assert {:error, error} = call_secret(%Context{auth: nil})
+      assert error.message =~ "scope"
+    end
+
+    test "a denied call never executes the handler" do
+      assert {:error, _} = call_secret(%Context{auth: %Claims{scopes: ["other"]}})
+      refute_received :secret_executed
+    end
+
+    test "scope denial has a stable error code and the required scopes in data" do
+      assert {:error, error} = call_secret(%Context{auth: %Claims{scopes: []}})
+      assert error.code == -32_600
+      assert error.data == %{required_scopes: ["secret:read"]}
+    end
+  end
+
+  describe "argument validation" do
+    test "rejects arguments that violate the input schema when enabled" do
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "add", "arguments" => %{"a" => 1}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
+      assert error.message =~ "b"
+    end
+
+    test "accepts valid arguments when enabled" do
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "add", "arguments" => %{"a" => 1, "b" => 2}}
+
+      assert {:ok, %{structuredContent: %{"sum" => 3}}} =
+               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+    end
+
+    test "does not validate when disabled (the default)" do
+      # Without validation the bad arguments reach the handler, which fails at runtime.
+      params = %{"name" => "add", "arguments" => %{"a" => 1}}
+
+      assert {:ok, %{isError: true}} =
+               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+    end
+
+    test "validates an omitted input_schema as an object" do
+      # A tool without an input_schema still must receive an object, not a bare value.
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "no_schema", "arguments" => "not-an-object"}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
+    end
+  end
+
   describe "resources" do
     test "resources/list and read of a static resource" do
       assert {:ok, %{resources: [resource]}} =

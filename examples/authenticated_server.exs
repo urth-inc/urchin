@@ -58,18 +58,15 @@ defmodule Notes do
 
   tool "save_note",
     description: "Save a note (requires the notes:write scope)",
+    scopes: ["notes:write"],
     input_schema: %{
       "type" => "object",
       "properties" => %{"text" => %{"type" => "string"}},
       "required" => ["text"]
     } do
-    # Per-tool authorization: the transport already authenticated the request; here we
-    # check the granted scopes for this specific operation.
-    if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "notes:write") do
-      {:ok, [Urchin.Content.text("saved: #{args["text"]}")]}
-    else
-      {:error, "the notes:write scope is required to save notes"}
-    end
+    # The notes:write scope is enforced declaratively before this runs, so the handler
+    # only deals with the happy path.
+    {:ok, [Urchin.Content.text("saved: #{args["text"]}")]}
   end
 end
 

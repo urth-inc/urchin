@@ -263,6 +263,21 @@ challenge so clients can discover the authorization server; under-scoped tokens 
 `insufficient_scope`. The validated claims are available to handlers as `ctx.auth` for
 per-tool decisions:
 
+Declare required scopes on the tool and they are enforced before the handler runs (this
+fails closed: a request with no authorization is denied):
+
+```elixir
+tool "delete", description: "Delete a file", scopes: ["files:write"] do
+  {:ok, [Urchin.Content.text("deleted")]}
+end
+```
+
+A per-tool scope failure is returned as a JSON-RPC error from `tools/call`
+(`invalid_request`, with `data: %{required_scopes: [...]}`); transport-level
+authentication and scope failures remain HTTP `401`/`403`.
+
+Or check `ctx.auth` yourself for finer-grained decisions:
+
 ```elixir
 tool "delete", description: "Delete a file" do
   if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "files:write") do
@@ -325,6 +340,7 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
+| `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` (see `Urchin.Schema`) |
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.

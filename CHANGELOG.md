@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Declarative tool scopes: `tool "name", scopes: ["files:write"], ...` enforces the scopes
+  against `ctx.auth` before the handler runs, failing closed when the request carries no
+  authorization.
+- `:validate_arguments` transport option (default `false`) validates `tools/call` arguments
+  against each DSL tool's `input_schema` and rejects a mismatch with `invalid_params` before
+  the handler runs. `Urchin.Schema` implements the supported (minimal) JSON Schema subset.
 - `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
   malformed handler returns are now logged in full but return a generic message to the
   client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
