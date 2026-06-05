@@ -33,6 +33,7 @@ defmodule Urchin.Context do
     params: %{},
     assigns: %{},
     min_log_level: "debug",
+    expose_internal_errors: false,
     cancelled_ref: nil
   ]
 
@@ -50,6 +51,7 @@ defmodule Urchin.Context do
           params: map(),
           assigns: map(),
           min_log_level: String.t(),
+          expose_internal_errors: boolean(),
           cancelled_ref: reference() | nil
         }
 
@@ -131,32 +133,40 @@ defmodule Urchin.Context do
   @doc """
   Issues a `sampling/createMessage` request to the client and waits for the result.
 
-  Returns `{:ok, result_map}` or `{:error, Urchin.Error.t()}`. Requires the client to
-  have advertised the `sampling` capability.
+  Returns `{:ok, result_map}` or `{:error, Urchin.Error.t()}`. Returns an error without
+  contacting the client when it did not advertise the `sampling` capability.
   """
   @spec create_message(t(), map(), timeout()) :: {:ok, map()} | {:error, Error.t()}
   def create_message(ctx, params, timeout \\ @default_request_timeout) do
-    request(ctx, "sampling/createMessage", params, timeout)
+    with :ok <- require_capability(ctx, "sampling") do
+      request(ctx, "sampling/createMessage", params, timeout)
+    end
   end
 
   @doc """
   Issues an `elicitation/create` request to the client and waits for the result.
 
-  Returns `{:ok, result_map}` or `{:error, Urchin.Error.t()}`.
+  Returns `{:ok, result_map}` or `{:error, Urchin.Error.t()}`. Returns an error without
+  contacting the client when it did not advertise the `elicitation` capability.
   """
   @spec elicit(t(), map(), timeout()) :: {:ok, map()} | {:error, Error.t()}
   def elicit(ctx, params, timeout \\ @default_request_timeout) do
-    request(ctx, "elicitation/create", params, timeout)
+    with :ok <- require_capability(ctx, "elicitation") do
+      request(ctx, "elicitation/create", params, timeout)
+    end
   end
 
   @doc """
   Issues a `roots/list` request to the client and waits for the result.
 
-  Returns `{:ok, %{"roots" => [...]}}` or `{:error, Urchin.Error.t()}`.
+  Returns `{:ok, %{"roots" => [...]}}` or `{:error, Urchin.Error.t()}`. Returns an error
+  without contacting the client when it did not advertise the `roots` capability.
   """
   @spec list_roots(t(), timeout()) :: {:ok, map()} | {:error, Error.t()}
   def list_roots(ctx, timeout \\ @default_request_timeout) do
-    request(ctx, "roots/list", nil, timeout)
+    with :ok <- require_capability(ctx, "roots") do
+      request(ctx, "roots/list", nil, timeout)
+    end
   end
 
   @doc """
@@ -196,6 +206,14 @@ defmodule Urchin.Context do
 
   def cancelled?(%__MODULE__{session: session, request_id: id}) do
     Urchin.Session.cancelled?(session, id)
+  end
+
+  defp require_capability(%__MODULE__{client_capabilities: caps}, name) do
+    if is_map(caps) and Map.has_key?(caps, name) do
+      :ok
+    else
+      {:error, Error.method_not_found(~s(Client did not advertise the "#{name}" capability))}
+    end
   end
 
   # Sends an outbound message to the process that owns the originating stream.

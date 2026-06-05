@@ -1,5 +1,10 @@
 # Urchin
 
+[![Hex.pm](https://img.shields.io/hexpm/v/urchin.svg)](https://hex.pm/packages/urchin)
+[![Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/urchin)
+[![Test](https://github.com/urth-inc/urchin/actions/workflows/test.yml/badge.svg?branch=develop)](https://github.com/urth-inc/urchin/actions/workflows/test.yml)
+[![License](https://img.shields.io/hexpm/l/urchin.svg)](https://github.com/urth-inc/urchin/blob/develop/LICENSE)
+
 A [Model Context Protocol](https://modelcontextprotocol.io) (MCP) **server** library
 for Elixir, implementing the [`2025-11-25`](https://modelcontextprotocol.io/specification/2025-11-25)
 specification over the **Streamable HTTP** transport.
@@ -26,7 +31,8 @@ Add `urchin` to your dependencies:
 ```elixir
 def deps do
   [
-    {:urchin, "~> 0.1"},
+    # The Hex badge above shows the latest version; `~> 0.2` accepts every later 0.x release.
+    {:urchin, "~> 0.2"},
     # Required only for the standalone endpoint (Urchin.start_link / Urchin.Endpoint):
     {:bandit, "~> 1.6"}
   ]
@@ -317,6 +323,7 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:min_log_level` | `"info"` | default minimum log level for new sessions |
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
+| `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
@@ -355,7 +362,14 @@ stream.
 When exposing a server beyond localhost, configure `:allowed_origins`, bind to the
 intended interface via `:ip`, and require authorization with `:auth` (see
 [Authorization](#authorization-oauth-21)). The transport validates the `Origin` header
-(DNS-rebinding protection) and issues cryptographically random session ids by default.
+(DNS-rebinding protection), issues cryptographically random session ids, keeps raised
+exception messages out of client responses (`:expose_internal_errors` is `false`), and
+only issues server-initiated requests for capabilities the client advertised.
+
+Session lifecycle limits (idle/TTL/max sessions) and rate limiting are not yet built in;
+add them in front of the transport for public deployments. See
+[SECURITY.md](SECURITY.md) for the threat model, a deployment checklist, and how to report
+vulnerabilities.
 
 ## License
 

@@ -62,6 +62,20 @@ defmodule Urchin.DispatcherTest do
       assert [%{type: "text"}] = result.content
     end
 
+    test "a raising tool redacts its exception message by default" do
+      params = %{"name" => "boom", "arguments" => %{}}
+      assert {:ok, result} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+      assert result.content == [%{type: "text", text: "Tool execution failed"}]
+      refute result.content |> hd() |> Map.get(:text) =~ "kaboom"
+    end
+
+    test "a raising tool exposes its message when expose_internal_errors is set" do
+      params = %{"name" => "boom", "arguments" => %{}}
+      ctx = %Context{expose_internal_errors: true}
+      assert {:ok, result} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert result.content == [%{type: "text", text: "kaboom"}]
+    end
+
     test "unknown tool is an invalid params error" do
       params = %{"name" => "nope", "arguments" => %{}}
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())

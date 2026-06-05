@@ -20,6 +20,8 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:min_log_level` - default minimum log level for new sessions (default `"info"`)
     * `:request_timeout` - per-request handler timeout in ms (default `60_000`)
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
+    * `:expose_internal_errors` - return raised-exception messages to the client instead of a
+      generic error (default `false`). Exceptions are always logged; enable only in development.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
@@ -53,6 +55,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       min_log_level: Keyword.get(opts, :min_log_level, "info"),
       request_timeout: Keyword.get(opts, :request_timeout, 60_000),
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
+      expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -85,20 +88,29 @@ defmodule Urchin.Transport.StreamableHTTP do
   ## POST
 
   defp handle_post(conn, config) do
-    with :ok <- check_accept_post(conn),
+    with :ok <- check_content_type(conn),
+         :ok <- check_accept_post(conn),
          {:ok, body, conn} <- read_full_body(conn),
          {:ok, decoded} <- JSONRPC.decode(body) do
       dispatch_post(conn, config, decoded)
     else
-      {:error, %Error{} = error} -> send_error(conn, status_for(error), nil, error)
-      :not_acceptable -> send_error(conn, 406, nil, Error.invalid_request("Not Acceptable"))
-      {:too_large, conn} -> send_error(conn, 413, nil, Error.invalid_request("Payload too large"))
+      {:error, %Error{} = error} ->
+        send_error(conn, status_for(error), nil, error)
+
+      :unsupported_media_type ->
+        send_error(conn, 415, nil, Error.invalid_request("Unsupported Media Type"))
+
+      :not_acceptable ->
+        send_error(conn, 406, nil, Error.invalid_request("Not Acceptable"))
+
+      {:too_large, conn} ->
+        send_error(conn, 413, nil, Error.invalid_request("Payload too large"))
     end
   end
 
   # The initialize handshake creates the session and is answered with a single JSON object.
   defp dispatch_post(conn, config, {:request, id, "initialize", params}) do
-    ctx = %Context{auth: conn_auth(conn)}
+    ctx = %Context{auth: conn_auth(conn), expose_internal_errors: config.expose_internal_errors}
 
     case Dispatcher.initialize(config.server, params, ctx) do
       {:ok, result, meta} ->
@@ -177,7 +189,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       client_capabilities: snapshot.client_capabilities,
       state: snapshot.server_state,
       auth: conn_auth(conn),
-      min_log_level: snapshot.min_log_level
+      min_log_level: snapshot.min_log_level,
+      expose_internal_errors: config.expose_internal_errors
     }
 
     {task_pid, task_ref} =
@@ -433,6 +446,20 @@ defmodule Urchin.Transport.StreamableHTTP do
 
   defp localhost_origin?(origin) do
     Regex.match?(~r{^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$}i, origin)
+  end
+
+  # POST bodies are a single JSON-RPC message. A present Content-Type must be
+  # application/json; a missing one is allowed (the JSON decode still guards the body).
+  defp check_content_type(conn) do
+    case get_req_header(conn, "content-type") do
+      [] ->
+        :ok
+
+      [value | _] ->
+        if value |> String.downcase() |> String.contains?("application/json"),
+          do: :ok,
+          else: :unsupported_media_type
+    end
   end
 
   # POST: the client MUST accept both application/json and text/event-stream, since the

@@ -52,14 +52,14 @@ defmodule Urchin.MixProject do
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/develop/CHANGELOG.md"
       },
-      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
+      files: ~w(lib mix.exs README.md LICENSE CHANGELOG.md SECURITY.md .formatter.exs)
     ]
   end
 
   defp docs do
     [
       main: "readme",
-      extras: ["README.md", "CHANGELOG.md", "LICENSE"],
+      extras: ["README.md", "CHANGELOG.md", "SECURITY.md", "LICENSE"],
       source_ref: "v#{@version}"
     ]
   end

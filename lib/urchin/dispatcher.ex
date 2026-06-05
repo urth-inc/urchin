@@ -8,6 +8,8 @@ defmodule Urchin.Dispatcher do
   rescued and converted to errors so transport processes never crash on handler bugs.
   """
 
+  require Logger
+
   alias Urchin.{Context, Error, Protocol, Result}
 
   @doc """
@@ -19,7 +21,7 @@ defmodule Urchin.Dispatcher do
   """
   @spec initialize(module(), map(), Context.t()) ::
           {:ok, map(), map()} | {:error, Error.t()}
-  def initialize(server, params, _ctx) when is_map(params) do
+  def initialize(server, params, ctx) when is_map(params) do
     requested = Map.get(params, "protocolVersion", Protocol.latest_version())
     negotiated = Protocol.negotiate(requested)
 
@@ -43,7 +45,7 @@ defmodule Urchin.Dispatcher do
       {:error, error}
 
     exception ->
-      {:error, Error.internal_error(Exception.message(exception))}
+      {:error, handler_error(exception, __STACKTRACE__, ctx, "initialize")}
   end
 
   def initialize(_server, _params, _ctx) do
@@ -68,9 +70,11 @@ defmodule Urchin.Dispatcher do
       {:error, error}
 
     exception ->
-      {:error, Error.internal_error("Handler crashed: " <> Exception.message(exception))}
+      {:error, handler_error(exception, __STACKTRACE__, ctx, "request #{method}")}
   catch
-    :throw, value -> {:error, Error.internal_error("Handler threw: " <> inspect(value))}
+    :throw, value ->
+      Logger.error("Urchin handler for #{method} threw: #{inspect(value)}")
+      {:error, Error.internal_error(generic_or(ctx, "Handler threw: " <> inspect(value)))}
   end
 
   # ping is always available regardless of declared capabilities.
@@ -188,7 +192,13 @@ defmodule Urchin.Dispatcher do
   rescue
     exception ->
       # A tool that raises reports a tool-execution error so the model can self-correct.
-      {:ok, %{content: [Urchin.Content.text(Exception.message(exception))], isError: true}}
+      Logger.error(
+        "Urchin tool #{name} crashed: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      text = generic_or(ctx, Exception.message(exception), "Tool execution failed")
+      {:ok, %{content: [Urchin.Content.text(text)], isError: true}}
   end
 
   defp call_tool_map(content, opts) do
@@ -280,6 +290,17 @@ defmodule Urchin.Dispatcher do
       _ -> raise Error.invalid_params(~s(Missing or invalid object param "#{key}"))
     end
   end
+
+  # Rescued exceptions are always logged in full but, by default, are not surfaced to the
+  # client. Set the transport's :expose_internal_errors to return the message instead.
+  defp handler_error(exception, stacktrace, ctx, label) do
+    Logger.error("Urchin #{label} crashed: " <> Exception.format(:error, exception, stacktrace))
+    Error.internal_error(generic_or(ctx, Exception.message(exception)))
+  end
+
+  defp generic_or(ctx, detail, generic \\ "Internal server error")
+  defp generic_or(%Context{expose_internal_errors: true}, detail, _generic), do: detail
+  defp generic_or(_ctx, _detail, generic), do: generic
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
