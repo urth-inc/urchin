@@ -22,12 +22,17 @@ defmodule Urchin.Session.Limiter do
   def reserve(max, server \\ __MODULE__), do: GenServer.call(server, {:reserve, max})
 
   @doc "Hands a reservation off to the session process, which frees the slot when it dies."
-  @spec assign(reference(), pid(), GenServer.server()) :: :ok
+  @spec assign(reference(), pid(), GenServer.server()) :: :ok | {:error, :unknown_reservation}
   def assign(ref, pid, server \\ __MODULE__), do: GenServer.call(server, {:assign, ref, pid})
 
-  @doc "Frees a reservation that will not become a session (e.g. init failed)."
+  @doc """
+  Frees a reservation that will not become a session (e.g. init failed).
+
+  Synchronous, so the slot is reclaimed before the caller proceeds rather than leaving a
+  transient over-count that could spuriously reject the next reserve.
+  """
   @spec release(reference(), GenServer.server()) :: :ok
-  def release(ref, server \\ __MODULE__), do: GenServer.cast(server, {:release, ref})
+  def release(ref, server \\ __MODULE__), do: GenServer.call(server, {:release, ref})
 
   @doc "Returns the number of reserved/active slots."
   @spec count(GenServer.server()) :: non_neg_integer()
@@ -55,14 +60,13 @@ defmodule Urchin.Session.Limiter do
         {:reply, :ok, %{state | slots: Map.put(state.slots, ref, monitor)}}
 
       :error ->
-        {:reply, :ok, state}
+        {:reply, {:error, :unknown_reservation}, state}
     end
   end
 
-  def handle_call(:count, _from, state), do: {:reply, state.count, state}
+  def handle_call({:release, ref}, _from, state), do: {:reply, :ok, drop_slot(state, ref)}
 
-  @impl true
-  def handle_cast({:release, ref}, state), do: {:noreply, drop_slot(state, ref)}
+  def handle_call(:count, _from, state), do: {:reply, state.count, state}
 
   @impl true
   def handle_info({:DOWN, monitor, :process, _pid, _reason}, state) do

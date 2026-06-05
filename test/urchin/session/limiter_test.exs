@@ -49,6 +49,12 @@ defmodule Urchin.Session.LimiterTest do
     assert {:ok, _} = Limiter.reserve(1, l)
   end
 
+  test "assigning an unknown reservation returns an error", %{limiter: l} do
+    pid = spawn(fn -> Process.sleep(:infinity) end)
+    assert {:error, :unknown_reservation} = Limiter.assign(make_ref(), pid, l)
+    Process.exit(pid, :kill)
+  end
+
   test "reserve is atomic under concurrency", %{limiter: l} do
     parent = self()
 

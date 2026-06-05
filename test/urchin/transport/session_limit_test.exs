@@ -8,7 +8,7 @@ defmodule Urchin.Transport.SessionLimitTest do
   alias Urchin.Session
   alias Urchin.Session.Limiter
   alias Urchin.Transport.StreamableHTTP
-  alias Urchin.Test.{EchoServer, SignalingServer}
+  alias Urchin.Test.{EchoServer, RaisingInitServer, SignalingServer}
 
   defp initialize(opts) do
     body =
@@ -57,6 +57,14 @@ defmodule Urchin.Transport.SessionLimitTest do
     assert_received :init_ran
     [sid] = get_resp_header(conn, "mcp-session-id")
     on_exit(fn -> if pid = Session.whereis(sid), do: Session.terminate(pid) end)
+  end
+
+  test "releases the reserved slot and returns 500 when the server's init/1 raises" do
+    before = Limiter.count()
+    conn = initialize(StreamableHTTP.init(server: RaisingInitServer))
+    assert conn.status == 500
+    refute conn.resp_body =~ "init boom"
+    assert Limiter.count() == before
   end
 
   test "rejects invalid session-limit options at init" do

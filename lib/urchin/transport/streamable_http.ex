@@ -43,6 +43,7 @@ defmodule Urchin.Transport.StreamableHTTP do
   @behaviour Plug
 
   import Plug.Conn
+  require Logger
 
   alias Urchin.{Auth, Context, Dispatcher, Error, JSONRPC, Protocol, Session, SSE}
 
@@ -133,19 +134,14 @@ defmodule Urchin.Transport.StreamableHTTP do
         # pays no init cost and the cap holds under concurrent initializes.
         case Session.Limiter.reserve(config.max_sessions) do
           {:ok, reservation} ->
-            case init_server_state(config) do
+            case safe_init_server_state(config) do
               {:ok, server_state} ->
                 start_session(conn, config, id, result, meta, server_state, reservation)
 
-              {:error, reason} ->
+              {:error, message} ->
+                # The reserved slot must be released whether init returned an error or raised.
                 Session.Limiter.release(reservation)
-
-                send_error(
-                  conn,
-                  500,
-                  id,
-                  Error.internal_error("Server init failed: #{inspect(reason)}")
-                )
+                send_error(conn, 500, id, Error.internal_error(message))
             end
 
           {:error, :max_sessions} ->
@@ -470,6 +466,26 @@ defmodule Urchin.Transport.StreamableHTTP do
     else
       {:ok, nil}
     end
+  end
+
+  # Runs init/1 so a reserved session slot is always reclaimed: a raised/thrown init is
+  # logged in full and reported as a generic error (the reservation is released either way).
+  defp safe_init_server_state(config) do
+    case init_server_state(config) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, "Server init failed: #{inspect(reason)}"}
+    end
+  rescue
+    exception ->
+      Logger.error(
+        "Urchin server init/1 crashed: " <> Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, "Server initialization failed"}
+  catch
+    kind, reason ->
+      Logger.error("Urchin server init/1 threw: #{inspect({kind, reason})}")
+      {:error, "Server initialization failed"}
   end
 
   # Session-limit options are positive millisecond/count values or nil; fail fast on a
