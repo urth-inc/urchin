@@ -31,6 +31,9 @@ and does not protect against, and what you must add before exposing a server pub
   `Urchin.Schema`), so unsupported keywords and `output_schema` are still your handler's
   responsibility.
 - **Bounded request bodies** (`@max_body`, ~8 MB) and a per-request handler timeout.
+- **Session lifecycle limits** (opt-in): `:max_sessions`, `:session_idle_timeout` and
+  `:session_max_lifetime`. Without them a session persists until the client sends `DELETE`,
+  so configure them on any public endpoint to avoid exhaustion.
 
 ## What you must add before public exposure
 
@@ -40,15 +43,13 @@ Urchin does **not** yet provide these; supply them in your deployment:
    production.
 2. **Authorization.** Set `:auth` (or front the transport with `Urchin.Auth.Plug`). An
    unauthenticated server bound to a public interface exposes every tool to anyone.
-3. **Rate limiting / concurrency limits.** Per IP, per session, and for `initialize` and
-   long-running tools.
-4. **Session lifecycle limits.** Idle timeout, max lifetime, and a cap on concurrent
-   sessions / in-flight requests. Sessions persist until the client sends `DELETE`, so an
-   unbounded public endpoint can be exhausted.
-5. **Per-tool authorization beyond scopes.** Declarative `scopes:` covers scope checks;
+3. **Rate limiting / per-session concurrency limits.** Per IP, per session, and for
+   `initialize` and long-running tools. (Session count and lifetime are covered by the
+   built-in limits above; request-rate and in-flight caps are not yet built in.)
+4. **Per-tool authorization beyond scopes.** Declarative `scopes:` covers scope checks;
    add app-specific authorization (ownership, tenancy, row-level access) in handlers via
    `ctx.auth`.
-6. **Full input validation.** Enable `:validate_arguments` for structural checks, but
+5. **Full input validation.** Enable `:validate_arguments` for structural checks, but
    validate unsupported JSON Schema keywords, business rules and `output_schema` in your
    handler — `Urchin.Schema` is a minimal subset.
 
@@ -60,7 +61,8 @@ Urchin does **not** yet provide these; supply them in your deployment:
 - [ ] `:allowed_origins` set explicitly (not the localhost default) for browser clients.
 - [ ] `:ip` bound to the intended interface.
 - [ ] `:expose_internal_errors` left at `false`.
-- [ ] Rate limiting and session limits in front of the transport.
+- [ ] `:max_sessions`, `:session_idle_timeout` and `:session_max_lifetime` configured.
+- [ ] Rate limiting in front of the transport.
 - [ ] Tokens never forwarded to upstream APIs (use a separate upstream token).
 
 ## Reporting a vulnerability

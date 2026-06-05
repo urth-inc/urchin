@@ -20,6 +20,14 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:min_log_level` - default minimum log level for new sessions (default `"info"`)
     * `:request_timeout` - per-request handler timeout in ms (default `60_000`)
     * `:validate_protocol_version` - validate the `MCP-Protocol-Version` header (default `true`)
+    * `:max_sessions` - reject new sessions with `503` once this many are active (default
+      `nil`, unlimited). The cap is enforced atomically before the server's `init/1` runs,
+      and is global across all sessions in the app.
+    * `:session_idle_timeout` - terminate a session after this many ms without client
+      activity (default `nil`, never). A session serving a request is not reaped.
+    * `:session_max_lifetime` - terminate a session this many ms after it was created,
+      regardless of activity (default `nil`, never). Set it above your longest expected
+      tool run, since it can expire a session mid-request.
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
     * `:validate_arguments` - validate `tools/call` arguments against each tool's
@@ -35,6 +43,7 @@ defmodule Urchin.Transport.StreamableHTTP do
   @behaviour Plug
 
   import Plug.Conn
+  require Logger
 
   alias Urchin.{Auth, Context, Dispatcher, Error, JSONRPC, Protocol, Session, SSE}
 
@@ -60,6 +69,9 @@ defmodule Urchin.Transport.StreamableHTTP do
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       validate_arguments: Keyword.get(opts, :validate_arguments, false),
+      max_sessions: positive_integer_opt!(opts, :max_sessions),
+      session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
+      session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -118,29 +130,22 @@ defmodule Urchin.Transport.StreamableHTTP do
 
     case Dispatcher.initialize(config.server, params, ctx) do
       {:ok, result, meta} ->
-        case init_server_state(config) do
-          {:ok, server_state} ->
-            {:ok, session_id, _pid} =
-              Session.start(
-                server: config.server,
-                server_state: server_state,
-                protocol_version: meta.protocol_version,
-                client_info: meta.client_info,
-                client_capabilities: meta.client_capabilities,
-                min_log_level: config.min_log_level
-              )
+        # Reserve a session slot before running the server's init/1, so a rejected session
+        # pays no init cost and the cap holds under concurrent initializes.
+        case Session.Limiter.reserve(config.max_sessions) do
+          {:ok, reservation} ->
+            case safe_init_server_state(config) do
+              {:ok, server_state} ->
+                start_session(conn, config, id, result, meta, server_state, reservation)
 
-            conn
-            |> put_resp_header(@session_header, session_id)
-            |> send_json(200, JSONRPC.result(id, result))
+              {:error, message} ->
+                # The reserved slot must be released whether init returned an error or raised.
+                Session.Limiter.release(reservation)
+                send_error(conn, 500, id, Error.internal_error(message))
+            end
 
-          {:error, reason} ->
-            send_error(
-              conn,
-              500,
-              id,
-              Error.internal_error("Server init failed: #{inspect(reason)}")
-            )
+          {:error, :max_sessions} ->
+            send_error(conn, 503, id, Error.internal_error("Maximum number of sessions reached"))
         end
 
       {:error, error} ->
@@ -154,6 +159,50 @@ defmodule Urchin.Transport.StreamableHTTP do
       route_session_message(conn, config, session_pid, decoded)
     else
       {:error, status, error} -> send_error(conn, status, message_id(decoded), error)
+    end
+  end
+
+  defp start_session(conn, config, id, result, meta, server_state, reservation) do
+    case Session.start(
+           server: config.server,
+           server_state: server_state,
+           protocol_version: meta.protocol_version,
+           client_info: meta.client_info,
+           client_capabilities: meta.client_capabilities,
+           min_log_level: config.min_log_level,
+           idle_timeout: config.session_idle_timeout,
+           max_lifetime: config.session_max_lifetime
+         ) do
+      {:ok, session_id, pid} ->
+        # Hand the reserved slot to the session. If the limiter no longer knows the
+        # reservation (e.g. it restarted since reserve/1), the session would be uncounted,
+        # so terminate it rather than admit a session outside the cap.
+        case Session.Limiter.assign(reservation, pid) do
+          :ok ->
+            conn
+            |> put_resp_header(@session_header, session_id)
+            |> send_json(200, JSONRPC.result(id, result))
+
+          {:error, :unknown_reservation} ->
+            Session.terminate(pid)
+
+            send_error(
+              conn,
+              500,
+              id,
+              Error.internal_error("Could not assign session reservation")
+            )
+        end
+
+      {:error, reason} ->
+        Session.Limiter.release(reservation)
+
+        send_error(
+          conn,
+          500,
+          id,
+          Error.internal_error("Could not start session: #{inspect(reason)}")
+        )
     end
   end
 
@@ -430,6 +479,42 @@ defmodule Urchin.Transport.StreamableHTTP do
       end
     else
       {:ok, nil}
+    end
+  end
+
+  # Runs init/1 so a reserved session slot is always reclaimed: a raised/thrown init is
+  # logged in full and reported as a generic error (the reservation is released either way).
+  defp safe_init_server_state(config) do
+    case init_server_state(config) do
+      {:ok, state} -> {:ok, state}
+      {:error, reason} -> {:error, "Server init failed: #{inspect(reason)}"}
+    end
+  rescue
+    exception ->
+      Logger.error(
+        "Urchin server init/1 crashed: " <> Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, "Server initialization failed"}
+  catch
+    kind, reason ->
+      Logger.error("Urchin server init/1 threw: #{inspect({kind, reason})}")
+      {:error, "Server initialization failed"}
+  end
+
+  # Session-limit options are positive millisecond/count values or nil; fail fast on a
+  # bad value (e.g. a negative timeout that would crash Process.send_after) at startup.
+  defp positive_integer_opt!(opts, key) do
+    case Keyword.get(opts, key) do
+      nil ->
+        nil
+
+      value when is_integer(value) and value > 0 ->
+        value
+
+      other ->
+        raise ArgumentError,
+              "#{inspect(key)} must be a positive integer or nil, got: #{inspect(other)}"
     end
   end
 

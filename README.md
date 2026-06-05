@@ -341,6 +341,9 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
 | `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` (see `Urchin.Schema`) |
+| `:max_sessions` | `nil` | reject new sessions with `503` past this many, atomically and before the server's `init/1` runs (`nil` = unlimited) |
+| `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity; a session serving a request is not reaped (`nil` = never) |
+| `:session_max_lifetime` | `nil` | terminate a session this many ms after creation regardless of activity; set above your longest tool run (`nil` = never) |
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
@@ -384,10 +387,10 @@ unexpected exception and malformed-return messages by default (`:expose_internal
 is `false`), and only issues server-initiated requests for capabilities the client
 advertised.
 
-Session lifecycle limits (idle/TTL/max sessions) and rate limiting are not yet built in;
-add them in front of the transport for public deployments. See
-[SECURITY.md](SECURITY.md) for the threat model, a deployment checklist, and how to report
-vulnerabilities.
+Session lifecycle limits are built in (`:max_sessions`, `:session_idle_timeout`,
+`:session_max_lifetime`); configure them for public deployments. Rate limiting is not yet
+built in; add it in front of the transport. See [SECURITY.md](SECURITY.md) for the threat
+model, a deployment checklist, and how to report vulnerabilities.
 
 ## License
 
