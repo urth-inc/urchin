@@ -1,4 +1,4 @@
-# Run with: mix run --no-halt examples/calculator.exs
+# Run with: mix run examples/calculator.exs
 #
 # Then, from another shell, initialize a session:
 #
@@ -45,5 +45,28 @@ defmodule Calculator do
   end
 end
 
-{:ok, _pid} = Urchin.start_link(Calculator, port: 4000, path: "/mcp")
+# This is the child spec you drop straight into your own application's supervision
+# tree (Urchin.Endpoint requires the optional :bandit dependency):
+#
+#     def start(_type, _args) do
+#       children = [{Urchin.Endpoint, server: Calculator, port: 4000, path: "/mcp"}]
+#       Supervisor.start_link(children, strategy: :one_for_one, name: MyApp.Supervisor)
+#     end
+#
+# There, the application supervisor owns the endpoint and the BEAM keeps it alive.
+# In a script we own it ourselves, so we start the supervisor and then block.
+children = [
+  {Urchin.Endpoint, server: Calculator, port: 4000, path: "/mcp"}
+]
+
+{:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 IO.puts("Calculator MCP server listening on http://127.0.0.1:4000/mcp")
+
+# Keep this process alive while the endpoint supervisor runs: Supervisor.start_link links
+# the tree to the caller, so blocking here is what keeps the server up. If the supervisor
+# goes down, exit with its reason and let `mix run` halt the VM.
+ref = Process.monitor(supervisor)
+
+receive do
+  {:DOWN, ^ref, :process, ^supervisor, reason} -> exit(reason)
+end

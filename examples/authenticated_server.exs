@@ -1,4 +1,4 @@
-# Run with: mix run --no-halt examples/authenticated_server.exs
+# Run with: mix run examples/authenticated_server.exs
 #
 # This example turns on OAuth 2.1 authorization. The token validator below is a
 # DEV-ONLY stub that accepts two hard-coded tokens; a real server would verify a JWT
@@ -105,6 +105,21 @@ auth =
     token_validator: Notes.Tokens
   )
 
-{:ok, _pid} = Urchin.start_link(Notes, port: 4000, path: "/mcp", auth: auth)
+# This is the child spec you drop straight into your own application's supervision
+# tree. In a script we own it ourselves, so we start the supervisor and then block.
+children = [
+  {Urchin.Endpoint, server: Notes, port: 4000, path: "/mcp", auth: auth}
+]
+
+{:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
 IO.puts("Authenticated Notes MCP server listening on http://127.0.0.1:4000/mcp")
 IO.puts("Discovery: http://127.0.0.1:4000/.well-known/oauth-protected-resource/mcp")
+
+# Keep this process alive while the endpoint supervisor runs: Supervisor.start_link links
+# the tree to the caller, so blocking here is what keeps the server up. If the supervisor
+# goes down, exit with its reason and let `mix run` halt the VM.
+ref = Process.monitor(supervisor)
+
+receive do
+  {:DOWN, ^ref, :process, ^supervisor, reason} -> exit(reason)
+end
