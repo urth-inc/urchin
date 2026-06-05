@@ -44,9 +44,10 @@ defmodule Keycloak.Introspection do
 
     case :httpc.request(:post, request, [{:timeout, 5_000}], []) do
       {:ok, {{_, 200, _}, _, payload}} ->
-        case Jason.decode!(payload) do
-          %{"active" => true} = claims -> {:ok, Urchin.Auth.Claims.from_map(claims)}
-          _ -> {:error, :invalid_token}
+        case Jason.decode(payload) do
+          {:ok, %{"active" => true} = claims} -> {:ok, Urchin.Auth.Claims.from_map(claims)}
+          {:ok, _} -> {:error, :invalid_token}
+          {:error, _} -> {:error, :server_error, "Introspection returned invalid JSON"}
         end
 
       # A non-200 or a transport error is the authorization server's problem, not the

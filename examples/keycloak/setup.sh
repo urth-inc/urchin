@@ -34,10 +34,18 @@ command -v python3 >/dev/null || {
 }
 
 echo "Waiting for Keycloak..."
+ready=0
 for _ in $(seq 1 60); do
-  if curl -sf -o /dev/null http://localhost:8080/realms/master/.well-known/openid-configuration; then break; fi
+  if curl -sf -o /dev/null http://localhost:8080/realms/master/.well-known/openid-configuration; then
+    ready=1
+    break
+  fi
   sleep 2
 done
+[ "$ready" -eq 1 ] || {
+  echo "Keycloak did not become ready within 120 seconds" >&2
+  exit 1
+}
 
 kc config credentials --server http://localhost:8080 --realm master --user admin --password admin
 
