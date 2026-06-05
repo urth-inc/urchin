@@ -1,0 +1,16 @@
+# Keycloak authorization server for the Urchin OAuth example.
+#
+#   docker compose up -d      # start Keycloak (admin console at http://localhost:8080)
+#   ./setup.sh                # create the realm, clients, scopes and a test user
+#
+# DEV-ONLY: dev mode, plain HTTP, in-memory database. Do not use as-is in production.
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.3
+    container_name: keycloak
+    command: start-dev
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
