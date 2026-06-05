@@ -47,6 +47,13 @@ defmodule Urchin.Test.EchoServer do
     {:error, {:db, "postgres://secret@host"}}
   end
 
+  tool "secret",
+    description: "Requires the secret:read scope",
+    scopes: ["secret:read"] do
+    _ = args
+    {:ok, [Urchin.Content.text("classified")]}
+  end
+
   tool "whoami", description: "Reports the authenticated subject and scopes from ctx.auth" do
     _ = args
 

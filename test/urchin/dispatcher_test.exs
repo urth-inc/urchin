@@ -97,6 +97,62 @@ defmodule Urchin.DispatcherTest do
     end
   end
 
+  describe "declarative tool scopes" do
+    alias Urchin.Auth.Claims
+
+    defp call_secret(ctx) do
+      Dispatcher.handle_request(
+        EchoServer,
+        "tools/call",
+        %{"name" => "secret", "arguments" => %{}},
+        ctx
+      )
+    end
+
+    test "runs the handler when the required scope is granted" do
+      ctx = %Context{auth: %Claims{scopes: ["secret:read"]}}
+
+      assert {:ok, %{content: [%{type: "text", text: "classified"}], isError: false}} =
+               call_secret(ctx)
+    end
+
+    test "denies when the granted scopes are insufficient" do
+      assert {:error, error} = call_secret(%Context{auth: %Claims{scopes: ["other"]}})
+      assert error.message =~ "scope"
+    end
+
+    test "denies (fail closed) when the request carries no authorization" do
+      assert {:error, error} = call_secret(%Context{auth: nil})
+      assert error.message =~ "scope"
+    end
+  end
+
+  describe "argument validation" do
+    test "rejects arguments that violate the input schema when enabled" do
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "add", "arguments" => %{"a" => 1}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
+      assert error.message =~ "b"
+    end
+
+    test "accepts valid arguments when enabled" do
+      ctx = %Context{validate_arguments: true}
+      params = %{"name" => "add", "arguments" => %{"a" => 1, "b" => 2}}
+
+      assert {:ok, %{structuredContent: %{"sum" => 3}}} =
+               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+    end
+
+    test "does not validate when disabled (the default)" do
+      # Without validation the bad arguments reach the handler, which fails at runtime.
+      params = %{"name" => "add", "arguments" => %{"a" => 1}}
+
+      assert {:ok, %{isError: true}} =
+               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+    end
+  end
+
   describe "resources" do
     test "resources/list and read of a static resource" do
       assert {:ok, %{resources: [resource]}} =

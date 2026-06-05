@@ -156,13 +156,20 @@ defmodule Urchin.Server do
   @doc """
   Declares a tool. The `do` block receives `args` and `ctx` bindings and must return
   a `call_tool/3` result.
+
+  Options beyond the `Urchin.Tool` fields:
+
+    * `:scopes` - OAuth scopes the caller must hold (checked against `ctx.auth`) before
+      the handler runs. The call fails with an error when the scopes are missing, including
+      when the request carries no authorization.
   """
   defmacro tool(name, opts \\ [], do: block) do
     fname = handler_name("tool", name)
+    {scopes, tool_opts} = Keyword.pop(opts, :scopes, [])
 
     quote do
-      @mcp_tools Urchin.Tool.new([{:name, unquote(name)} | unquote(opts)])
-      @mcp_tool_dispatch {unquote(name), unquote(fname)}
+      @mcp_tools Urchin.Tool.new([{:name, unquote(name)} | unquote(tool_opts)])
+      @mcp_tool_dispatch {unquote(name), unquote(fname), unquote(scopes)}
       @doc false
       def unquote(fname)(var!(args), var!(ctx)) do
         _ = {var!(args), var!(ctx)}
@@ -284,8 +291,14 @@ defmodule Urchin.Server do
       @impl true
       def call_tool(name, args, ctx) do
         case List.keyfind(Enum.reverse(@mcp_tool_dispatch), name, 0) do
-          {_name, fname} -> apply(__MODULE__, fname, [args, ctx])
-          nil -> {:error, Urchin.Error.invalid_params("Unknown tool: " <> name)}
+          {_name, fname, scopes} ->
+            with :ok <- Urchin.Server.__authorize_tool__(scopes, ctx),
+                 :ok <- Urchin.Server.__validate_tool_args__(name, args, ctx, __mcp_tools__()) do
+              apply(__MODULE__, fname, [args, ctx])
+            end
+
+          nil ->
+            {:error, Urchin.Error.invalid_params("Unknown tool: " <> name)}
         end
       end
     end
@@ -388,6 +401,33 @@ defmodule Urchin.Server do
   defp put_if(map, false, _key, _value), do: map
 
   ## Runtime helpers used by generated code
+
+  @doc false
+  @spec __authorize_tool__([String.t()], Context.t()) :: :ok | {:error, Urchin.Error.t()}
+  def __authorize_tool__([], _ctx), do: :ok
+
+  def __authorize_tool__(scopes, %Context{} = ctx) do
+    if Urchin.Auth.Claims.has_scopes?(ctx.auth, scopes) do
+      :ok
+    else
+      {:error,
+       Urchin.Error.invalid_request("Insufficient scope; requires: " <> Enum.join(scopes, " "))}
+    end
+  end
+
+  @doc false
+  @spec __validate_tool_args__(String.t(), map(), Context.t(), [Urchin.Tool.t()]) ::
+          :ok | {:error, Urchin.Error.t()}
+  def __validate_tool_args__(_name, _args, %Context{validate_arguments: false}, _tools), do: :ok
+
+  def __validate_tool_args__(name, args, _ctx, tools) do
+    schema = Enum.find_value(tools, fn tool -> if tool.name == name, do: tool.input_schema end)
+
+    case Urchin.Schema.validate(schema, args) do
+      :ok -> :ok
+      {:error, reason} -> {:error, Urchin.Error.invalid_params(reason)}
+    end
+  end
 
   @doc false
   @spec __server_info__(keyword()) :: map()
