@@ -293,5 +293,34 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert conn.status == 400
       assert Jason.decode!(conn.resp_body)["error"]["code"] == -32_700
     end
+
+    test "a non-JSON Content-Type is rejected with 415" do
+      conn =
+        conn(:post, "/", Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"}))
+        |> put_req_header("content-type", "text/plain")
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> StreamableHTTP.call(@opts)
+
+      assert conn.status == 415
+    end
+
+    test "Content-Type must be exactly the application/json media type" do
+      body = Jason.encode!(%{jsonrpc: "2.0", id: 1, method: "ping"})
+
+      status = fn content_type ->
+        conn(:post, "/", body)
+        |> put_req_header("content-type", content_type)
+        |> put_req_header("accept", "application/json, text/event-stream")
+        |> StreamableHTTP.call(@opts)
+        |> Map.fetch!(:status)
+      end
+
+      # Parameters such as charset are allowed.
+      refute status.("application/json; charset=utf-8") == 415
+      # Look-alikes are rejected.
+      assert status.("application/json-bogus") == 415
+      assert status.("text/plain; application/json") == 415
+      assert status.("x-application/json") == 415
+    end
   end
 end

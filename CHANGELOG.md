@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
+  malformed handler returns are now logged in full but return a generic message to the
+  client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
+  values and `{:error, message}` returns still pass through unchanged.
+- Capability guards: `Urchin.Context.create_message/3`, `elicit/3` and `list_roots/2`
+  return an error without contacting the client when it did not advertise the matching
+  `sampling`/`elicitation`/`roots` capability.
+- `415 Unsupported Media Type` for POST requests whose `Content-Type` is not
+  `application/json`.
+- `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
+
 ## [0.2.0] - 2026-06-05
 
 ### Added

@@ -37,7 +37,8 @@ defmodule Urchin.IntegrationTest do
         method: "initialize",
         params: %{
           "protocolVersion" => "2025-11-25",
-          "capabilities" => %{},
+          # The "ask" tool issues elicitation/create, so advertise that client capability.
+          "capabilities" => %{"elicitation" => %{}},
           "clientInfo" => %{"name" => "c", "version" => "1"}
         }
       })

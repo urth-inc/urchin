@@ -8,6 +8,8 @@ defmodule Urchin.Dispatcher do
   rescued and converted to errors so transport processes never crash on handler bugs.
   """
 
+  require Logger
+
   alias Urchin.{Context, Error, Protocol, Result}
 
   @doc """
@@ -19,7 +21,7 @@ defmodule Urchin.Dispatcher do
   """
   @spec initialize(module(), map(), Context.t()) ::
           {:ok, map(), map()} | {:error, Error.t()}
-  def initialize(server, params, _ctx) when is_map(params) do
+  def initialize(server, params, ctx) when is_map(params) do
     requested = Map.get(params, "protocolVersion", Protocol.latest_version())
     negotiated = Protocol.negotiate(requested)
 
@@ -43,7 +45,7 @@ defmodule Urchin.Dispatcher do
       {:error, error}
 
     exception ->
-      {:error, Error.internal_error(Exception.message(exception))}
+      {:error, handler_error(exception, __STACKTRACE__, ctx, "initialize")}
   end
 
   def initialize(_server, _params, _ctx) do
@@ -68,9 +70,11 @@ defmodule Urchin.Dispatcher do
       {:error, error}
 
     exception ->
-      {:error, Error.internal_error("Handler crashed: " <> Exception.message(exception))}
+      {:error, handler_error(exception, __STACKTRACE__, ctx, "request #{method}")}
   catch
-    :throw, value -> {:error, Error.internal_error("Handler threw: " <> inspect(value))}
+    :throw, value ->
+      Logger.error("Urchin handler for #{method} threw: #{inspect(value)}")
+      {:error, Error.internal_error(generic_or(ctx, "Handler threw: " <> inspect(value)))}
   end
 
   # ping is always available regardless of declared capabilities.
@@ -78,7 +82,7 @@ defmodule Urchin.Dispatcher do
 
   defp do_handle(server, "tools/list", params, ctx) do
     with_callback(server, :list_tools, 2, fn ->
-      server.list_tools(cursor(params), ctx) |> list_result(:tools)
+      server.list_tools(cursor(params), ctx) |> list_result(:tools, ctx)
     end)
   end
 
@@ -92,13 +96,13 @@ defmodule Urchin.Dispatcher do
 
   defp do_handle(server, "resources/list", params, ctx) do
     with_callback(server, :list_resources, 2, fn ->
-      server.list_resources(cursor(params), ctx) |> list_result(:resources)
+      server.list_resources(cursor(params), ctx) |> list_result(:resources, ctx)
     end)
   end
 
   defp do_handle(server, "resources/templates/list", params, ctx) do
     with_callback(server, :list_resource_templates, 2, fn ->
-      server.list_resource_templates(cursor(params), ctx) |> list_result(:resourceTemplates)
+      server.list_resource_templates(cursor(params), ctx) |> list_result(:resourceTemplates, ctx)
     end)
   end
 
@@ -108,7 +112,7 @@ defmodule Urchin.Dispatcher do
 
       case server.read_resource(uri, %{ctx | uri: uri}) do
         {:ok, contents} -> {:ok, %{contents: List.wrap(contents)}}
-        other -> normalize_error(other)
+        other -> normalize_error(other, ctx)
       end
     end)
   end
@@ -116,20 +120,20 @@ defmodule Urchin.Dispatcher do
   defp do_handle(server, "resources/subscribe", params, ctx) do
     with_callback(server, :subscribe_resource, 2, fn ->
       uri = require_string(params, "uri")
-      empty_result(server.subscribe_resource(uri, %{ctx | uri: uri}))
+      empty_result(server.subscribe_resource(uri, %{ctx | uri: uri}), ctx)
     end)
   end
 
   defp do_handle(server, "resources/unsubscribe", params, ctx) do
     with_callback(server, :unsubscribe_resource, 2, fn ->
       uri = require_string(params, "uri")
-      empty_result(server.unsubscribe_resource(uri, %{ctx | uri: uri}))
+      empty_result(server.unsubscribe_resource(uri, %{ctx | uri: uri}), ctx)
     end)
   end
 
   defp do_handle(server, "prompts/list", params, ctx) do
     with_callback(server, :list_prompts, 2, fn ->
-      server.list_prompts(cursor(params), ctx) |> list_result(:prompts)
+      server.list_prompts(cursor(params), ctx) |> list_result(:prompts, ctx)
     end)
   end
 
@@ -146,7 +150,7 @@ defmodule Urchin.Dispatcher do
           {:ok, maybe_put(%{messages: messages}, :description, description)}
 
         other ->
-          normalize_error(other)
+          normalize_error(other, ctx)
       end
     end)
   end
@@ -159,7 +163,7 @@ defmodule Urchin.Dispatcher do
 
       case server.complete(ref, argument, completion_context, ctx) do
         {:ok, completion} -> {:ok, %{completion: completion(completion)}}
-        other -> normalize_error(other)
+        other -> normalize_error(other, ctx)
       end
     end)
   end
@@ -167,7 +171,7 @@ defmodule Urchin.Dispatcher do
   defp do_handle(server, "logging/setLevel", params, ctx) do
     with_callback(server, :set_log_level, 2, fn ->
       level = require_string(params, "level")
-      empty_result(server.set_log_level(level, ctx))
+      empty_result(server.set_log_level(level, ctx), ctx)
     end)
   end
 
@@ -183,12 +187,18 @@ defmodule Urchin.Dispatcher do
       %Result.CallTool{} = result -> {:ok, Result.CallTool.to_map(result)}
       {:ok, content} when is_list(content) -> {:ok, %{content: content, isError: false}}
       {:ok, content, opts} when is_list(content) -> {:ok, call_tool_map(content, opts)}
-      other -> normalize_error(other)
+      other -> normalize_error(other, ctx)
     end
   rescue
     exception ->
       # A tool that raises reports a tool-execution error so the model can self-correct.
-      {:ok, %{content: [Urchin.Content.text(Exception.message(exception))], isError: true}}
+      Logger.error(
+        "Urchin tool #{name} crashed: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      text = generic_or(ctx, Exception.message(exception), "Tool execution failed")
+      {:ok, %{content: [Urchin.Content.text(text)], isError: true}}
   end
 
   defp call_tool_map(content, opts) do
@@ -196,17 +206,17 @@ defmodule Urchin.Dispatcher do
     |> maybe_put(:structuredContent, opts[:structured_content])
   end
 
-  defp list_result({:ok, items}, key) when is_list(items), do: {:ok, %{key => items}}
-  defp list_result({:ok, items, nil}, key) when is_list(items), do: {:ok, %{key => items}}
+  defp list_result({:ok, items}, key, _ctx) when is_list(items), do: {:ok, %{key => items}}
+  defp list_result({:ok, items, nil}, key, _ctx) when is_list(items), do: {:ok, %{key => items}}
 
-  defp list_result({:ok, items, cursor}, key) when is_list(items),
+  defp list_result({:ok, items, cursor}, key, _ctx) when is_list(items),
     do: {:ok, %{key => items, :nextCursor => cursor}}
 
-  defp list_result(other, _key), do: normalize_error(other)
+  defp list_result(other, _key, ctx), do: normalize_error(other, ctx)
 
-  defp empty_result(:ok), do: {:ok, %{}}
-  defp empty_result({:ok, _}), do: {:ok, %{}}
-  defp empty_result(other), do: normalize_error(other)
+  defp empty_result(:ok, _ctx), do: {:ok, %{}}
+  defp empty_result({:ok, _}, _ctx), do: {:ok, %{}}
+  defp empty_result(other, ctx), do: normalize_error(other, ctx)
 
   defp completion(values) when is_list(values), do: %{values: values}
 
@@ -224,15 +234,25 @@ defmodule Urchin.Dispatcher do
     end
   end
 
-  defp normalize_error({:error, %Error{} = error}), do: {:error, error}
+  # Deliberate errors pass through: an Urchin.Error and an {:error, binary} message are the
+  # handler's choice. A non-binary error reason or an unexpected return value may carry
+  # internals, so it is logged and redacted unless :expose_internal_errors is set.
+  defp normalize_error({:error, %Error{} = error}, _ctx), do: {:error, error}
 
-  defp normalize_error({:error, message}) when is_binary(message),
+  defp normalize_error({:error, message}, _ctx) when is_binary(message),
     do: {:error, Error.internal_error(message)}
 
-  defp normalize_error({:error, reason}), do: {:error, Error.internal_error(inspect(reason))}
+  defp normalize_error({:error, reason}, ctx) do
+    detail = inspect(reason)
+    Logger.error("Urchin handler returned an error reason: #{detail}")
+    {:error, Error.internal_error(generic_or(ctx, detail))}
+  end
 
-  defp normalize_error(other),
-    do: {:error, Error.internal_error("Invalid handler return: " <> inspect(other))}
+  defp normalize_error(other, ctx) do
+    detail = "Invalid handler return: " <> inspect(other)
+    Logger.error("Urchin handler returned an invalid value: #{detail}")
+    {:error, Error.internal_error(generic_or(ctx, detail))}
+  end
 
   ## Helpers
 
@@ -280,6 +300,17 @@ defmodule Urchin.Dispatcher do
       _ -> raise Error.invalid_params(~s(Missing or invalid object param "#{key}"))
     end
   end
+
+  # Rescued exceptions are always logged in full but, by default, are not surfaced to the
+  # client. Set the transport's :expose_internal_errors to return the message instead.
+  defp handler_error(exception, stacktrace, ctx, label) do
+    Logger.error("Urchin #{label} crashed: " <> Exception.format(:error, exception, stacktrace))
+    Error.internal_error(generic_or(ctx, Exception.message(exception)))
+  end
+
+  defp generic_or(ctx, detail, generic \\ "Internal server error")
+  defp generic_or(%Context{expose_internal_errors: true}, detail, _generic), do: detail
+  defp generic_or(_ctx, _detail, generic), do: generic
 
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
