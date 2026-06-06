@@ -34,6 +34,11 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
+  Duplicate tool names within a server are rejected at compile time. Pass
+  `validate_tool_names: true` to `use Urchin.Server` to additionally enforce that every literal
+  tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`); a non-matching name raises
+  `ArgumentError`.
+
   ## Behaviour
 
   Implement the callbacks directly for full control or stateful servers. All
@@ -53,6 +58,11 @@ defmodule Urchin.Server do
   """
 
   alias Urchin.{Context, Error}
+
+  # Constrained tool-name charset. The MCP schema imposes no pattern, but this is the
+  # de-facto convention shared by common tool-calling SDKs; dots and dashes are permitted
+  # for namespacing. Enforced only when the server opts in via :validate_tool_names.
+  @tool_name_pattern ~r/^[a-zA-Z0-9_.-]{1,128}$/
 
   @type cursor :: String.t() | nil
   @type list_result(item) ::
@@ -247,6 +257,48 @@ defmodule Urchin.Server do
     raise ArgumentError, "tool :scopes must be a list of strings, got: #{inspect(other)}"
   end
 
+  # Duplicate tool names within a server are always rejected at compile time (a silently
+  # shadowed duplicate is a bug). The name-pattern check is opt-in via :validate_tool_names.
+  # Non-literal names (a variable or call) cannot be compared statically and are skipped,
+  # mirroring handler_name/2.
+  defp validate_tool_names!(tool_dispatch, opts) do
+    names =
+      tool_dispatch
+      |> Enum.map(fn {name, _fname, _scopes} -> name end)
+      |> Enum.filter(&is_binary/1)
+
+    validate_unique_tool_names!(names)
+
+    if Keyword.get(opts, :validate_tool_names, false) do
+      Enum.each(names, &validate_tool_name_pattern!/1)
+    end
+
+    :ok
+  end
+
+  defp validate_tool_name_pattern!(name) do
+    if not Regex.match?(@tool_name_pattern, name) do
+      raise ArgumentError,
+            "tool name #{inspect(name)} is invalid; must match #{inspect(@tool_name_pattern.source)}"
+    end
+  end
+
+  defp validate_unique_tool_names!(names) do
+    duplicates =
+      names
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(fn {name, _count} -> name end)
+
+    case duplicates do
+      [] ->
+        :ok
+
+      dups ->
+        raise ArgumentError, "duplicate tool name(s): #{Enum.map_join(dups, ", ", &inspect/1)}"
+    end
+  end
+
   # Generates a deterministic private handler name. Determinism matters because Mix's
   # incremental compiler assumes stable output for unchanged sources.
   defp handler_name(prefix, name) when is_binary(name) do
@@ -263,7 +315,10 @@ defmodule Urchin.Server do
     mod = env.module
     opts = Module.get_attribute(mod, :mcp_opts) || []
 
-    has_tools? = Module.get_attribute(mod, :mcp_tool_dispatch) != []
+    tool_dispatch = Module.get_attribute(mod, :mcp_tool_dispatch) || []
+    validate_tool_names!(tool_dispatch, opts)
+
+    has_tools? = tool_dispatch != []
     has_resources? = Module.get_attribute(mod, :mcp_resources) != []
     has_templates? = Module.get_attribute(mod, :mcp_resource_templates) != []
     has_prompts? = Module.get_attribute(mod, :mcp_prompt_dispatch) != []

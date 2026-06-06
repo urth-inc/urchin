@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
   `isError: true` so the model can self-correct, instead of a JSON-RPC internal error. A
   protocol error returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error.
+- `validate_tool_names: true` option for `use Urchin.Server` enforcing, at compile time, that
+  every literal tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`).
 
 ### Changed
 
@@ -47,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `use Urchin.Server, logging: true`) makes `logging/setLevel` succeed and apply the level to
   the session even when the server does not export `set_log_level/2`. An exported
   `set_log_level/2` is still invoked as a hook.
+
+### Fixed
+
+- Duplicate tool names within a server are now rejected at compile time (a silently shadowed
+  duplicate was previously accepted, with the last declaration winning).
 
 ## [0.2.0] - 2026-06-05
 
