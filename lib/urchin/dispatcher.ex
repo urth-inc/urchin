@@ -202,8 +202,8 @@ defmodule Urchin.Dispatcher do
       level = require_string(params, "level")
 
       with :ok <- validate_log_level(level),
-           :ok <- run_log_level_hook(server, level, ctx) do
-        set_session_log_level(ctx, level)
+           :ok <- run_log_level_hook(server, level, ctx),
+           :ok <- set_session_log_level(ctx, level) do
         {:ok, %{}}
       end
     else
@@ -311,9 +311,13 @@ defmodule Urchin.Dispatcher do
   end
 
   # Apply the client-requested log level to the session when one exists; a nil session
-  # (e.g. a handler invoked in a unit test) is a no-op.
+  # (e.g. a handler invoked in a unit test) is a no-op. If the session died mid-request,
+  # surface a clean error rather than a generic crash from the GenServer.call exit.
   defp set_session_log_level(%Context{session: session}, level) when is_pid(session) do
     Session.set_log_level(session, level)
+    :ok
+  catch
+    :exit, _ -> {:error, Error.invalid_request("Session not found")}
   end
 
   defp set_session_log_level(_ctx, _level), do: :ok
