@@ -377,5 +377,38 @@ defmodule Urchin.Transport.StreamableHTTPTest do
         StreamableHTTP.init(server: EchoServer, sse_buffer_limit: -1)
       end
     end
+
+    test "is forwarded to the session created by the transport" do
+      opts = StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 1)
+
+      conn =
+        post(
+          %{
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
+          },
+          [],
+          opts
+        )
+
+      assert conn.status == 200
+      [session_id] = get_resp_header(conn, "mcp-session-id")
+      pid = Urchin.Session.whereis(session_id)
+
+      Urchin.Session.notify(pid, "notifications/message", %{"n" => 1})
+      Urchin.Session.notify(pid, "notifications/message", %{"n" => 2})
+
+      # With the buffer capped at 1, only the most recent event is available to replay.
+      {:ok, "g0", replay} = Urchin.Session.register_general_stream(pid, self(), {"g0", 0})
+      assert length(replay) == 1
+
+      Urchin.Session.terminate(pid)
+    end
   end
 end
