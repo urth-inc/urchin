@@ -28,10 +28,10 @@ and does not protect against, and what you must add before exposing a server pub
   `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization (only meaningful when `ctx.auth` is populated, typically by `:auth` or an
   upstream `Urchin.Auth.Plug`).
-- **Argument validation.** `tools/call` arguments are validated against each tool's
-  `input_schema` before the handler runs. It is a minimal subset of JSON Schema (see
-  `Urchin.Schema`), so unsupported keywords and `output_schema` are still your handler's
-  responsibility.
+- **Argument validation.** A DSL tool's `tools/call` arguments are validated against its
+  `input_schema` before the handler runs (a hand-written `call_tool/3` validates its own
+  arguments). It is a minimal subset of JSON Schema (see `Urchin.Schema`), so unsupported
+  keywords and `output_schema` are still your handler's responsibility.
 - **Bounded request bodies** (`@max_body`, ~8 MB) and a per-request handler timeout.
 - **Session lifecycle limits** (opt-in): `:max_sessions`, `:session_idle_timeout` and
   `:session_max_lifetime`. Without them a session persists until the client sends `DELETE`,

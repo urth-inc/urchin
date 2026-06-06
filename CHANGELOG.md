@@ -43,13 +43,14 @@ details and how to adapt.
 The following are now enforced by default, with no opt-out, for MCP spec compliance. They are
 breaking relative to `0.2.0`.
 
-- `tools/call` arguments are validated against each tool's `input_schema` before the handler
-  runs; a mismatch is returned as a `CallToolResult` with `isError: true` so the model can
-  self-correct. A tool that declares no `input_schema` now defaults to an object that accepts
-  no properties (`additionalProperties: false`), so unexpected arguments are rejected — declare
-  an explicit `input_schema` to accept arbitrary fields. A non-object `arguments` value is a
-  malformed request and remains a JSON-RPC `invalid_params` error. `Urchin.Schema` implements
-  the supported (minimal) JSON Schema subset.
+- A DSL tool's `tools/call` arguments are validated against its `input_schema` before the
+  handler runs; a mismatch is returned as a `CallToolResult` with `isError: true` so the model
+  can self-correct. A tool that declares no `input_schema` now defaults to an object that
+  accepts no properties (`additionalProperties: false`), so unexpected arguments are rejected —
+  declare an explicit `input_schema` to accept arbitrary fields. A non-object `arguments` value
+  is a malformed request and remains a JSON-RPC `invalid_params` error. Servers that implement
+  `call_tool/3` by hand validate their own arguments. `Urchin.Schema` implements the supported
+  (minimal) JSON Schema subset.
 - Operation requests received before the client sends `notifications/initialized` are rejected
   with `invalid_request`; only `ping` and `logging/setLevel` are allowed before initialization.
   Clients must complete the lifecycle handshake before issuing other requests.
@@ -57,9 +58,10 @@ breaking relative to `0.2.0`.
   `isError: true` so the model can self-correct. A protocol error returned as
   `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
   became a JSON-RPC internal error.)
-- Tool names are validated at compile time: every literal name must match
-  `~r/\A[a-zA-Z0-9_.-]{1,128}\z/`, and duplicate names within a server are rejected (a silently
-  shadowed duplicate was previously accepted, with the last declaration winning).
+- Literal tool names are validated at compile time against `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` — a
+  de-facto convention shared by common tool-calling SDKs that Urchin now enforces, though the
+  MCP schema itself imposes no pattern — and duplicate names within a server are rejected (a
+  silently shadowed duplicate was previously accepted, with the last declaration winning).
 - `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`
   (with a string `name` and `version`); a missing or mistyped field is an `invalid_params`
   error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a

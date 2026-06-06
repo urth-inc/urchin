@@ -355,11 +355,12 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
 
-Some MCP behaviors are enforced unconditionally and have no option: `tools/call` arguments are
-validated against each tool's `input_schema` (a mismatch is an `isError` `CallToolResult`; a tool
-with no schema accepts no properties); operation requests before `notifications/initialized` are
-rejected (`ping` and `logging/setLevel` excepted); a `tools/call` handler's `{:error, binary}` is
-returned as an `isError` `CallToolResult`; tool names are validated at compile time; and
+Some MCP behaviors are enforced unconditionally and have no option: a DSL tool's `tools/call`
+arguments are validated against its `input_schema` (a mismatch is an `isError` `CallToolResult`; a
+tool with no schema accepts no properties — servers that implement `call_tool/3` by hand validate
+their own arguments); operation requests before `notifications/initialized` are rejected (`ping`
+and `logging/setLevel` excepted); a `tools/call` handler's `{:error, binary}` is returned as an
+`isError` `CallToolResult`; literal tool names are validated at compile time; and
 `completion/complete` results are capped at 100 values.
 
 ## Specification coverage
