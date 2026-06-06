@@ -289,7 +289,7 @@ tool "delete", description: "Delete a file" do
   else
     # Return an Urchin.Error so the denial is a JSON-RPC `invalid_request`, matching the
     # declarative `scopes:` path. A bare string `{:error, "..."}` would instead surface as a
-    # `CallToolResult` with `isError: true` under the default `tool_errors: :result`.
+    # `CallToolResult` with `isError: true`.
     {:error, Urchin.Error.invalid_request("files:write scope required")}
   end
 end
@@ -347,9 +347,6 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
-| `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` before the handler runs; a mismatch is surfaced per `:tool_errors` (an `isError` result by default). A non-object `arguments` is a malformed request and is always a JSON-RPC `invalid_params` error, regardless of this option or `:tool_errors`. See `Urchin.Schema` |
-| `:enforce_initialized` | `false` | reject operation requests received before `notifications/initialized` with `invalid_request`; only `ping` is allowed |
-| `:tool_errors` | `:result` | how a `tools/call` handler's `{:error, binary}` is surfaced: `:result` returns a `CallToolResult` with `isError: true` so the model can self-correct; `:json_rpc` returns a JSON-RPC internal error. `{:error, %Urchin.Error{}}` is always a JSON-RPC error; other methods are unaffected |
 | `:sse_buffer_limit` | `nil` | max recent GET-stream (general SSE) events kept per session for resumption replay (`nil` keeps the session default of `100`) |
 | `:max_sessions` | `nil` | reject new sessions with `503` past this many, atomically and before the server's `init/1` runs (`nil` = unlimited) |
 | `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity; a session serving a request is not reaped (`nil` = never) |
@@ -357,6 +354,13 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
+
+Some MCP behaviors are enforced unconditionally and have no option: `tools/call` arguments are
+validated against each tool's `input_schema` (a mismatch is an `isError` `CallToolResult`; a tool
+with no schema accepts no properties); operation requests before `notifications/initialized` are
+rejected (`ping` and `logging/setLevel` excepted); a `tools/call` handler's `{:error, binary}` is
+returned as an `isError` `CallToolResult`; tool names are validated at compile time; and
+`completion/complete` results are capped at 100 values.
 
 ## Specification coverage
 

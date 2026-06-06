@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This release makes the server enforce the MCP specification by default. Several behaviors
+that were previously absent or lenient are now always on; see Changed for the breaking
+details and how to adapt.
+
 ### Added
 
 - Session lifecycle limits: `:max_sessions` (reject new sessions with `503` past a cap —
@@ -19,41 +23,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Declarative tool scopes: `tool "name", scopes: ["files:write"], ...` enforces the scopes
   against `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization.
-- `:validate_arguments` transport option (default `false`) validates `tools/call` arguments
-  against each DSL tool's `input_schema` before the handler runs. A mismatch is treated as a
-  tool-input error: surfaced as a `CallToolResult` with `isError: true` by default (per
-  `:tool_errors`), or a JSON-RPC `invalid_params` error under `tool_errors: :json_rpc`.
-  `Urchin.Schema` implements the supported (minimal) JSON Schema subset.
 - `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
   malformed handler returns are now logged in full but return a generic message to the
   client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
   values and `{:error, message}` returns are never redacted — their `message`/`data` reach the
-  client unchanged. Whether a `tools/call` string error is delivered as a JSON-RPC error or an
-  `isError` result is governed separately by `:tool_errors` (see below).
+  client unchanged.
 - Capability guards: `Urchin.Context.create_message/3`, `elicit/3` and `list_roots/2`
   return an error without contacting the client when it did not advertise the matching
   `sampling`/`elicitation`/`roots` capability.
 - `415 Unsupported Media Type` for POST requests whose `Content-Type` is not
   `application/json`.
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
-- `:enforce_initialized` transport option (default `false`) rejecting operation requests
-  received before the client sends `notifications/initialized` with `invalid_request`;
-  only `ping` is allowed. The default may be flipped to `true` in a future minor release; set
-  `true` for strict MCP lifecycle compliance.
-- `:tool_errors` transport option (`:result` default | `:json_rpc`). By default a `tools/call`
-  handler's `{:error, message}` (string) is now returned as a `CallToolResult` with
-  `isError: true` so the model can self-correct (the spec-compliant behavior); set `:json_rpc`
-  for the legacy behavior of returning a JSON-RPC internal error. A protocol error returned as
-  `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Note: this changes the prior behavior
-  where such a handler error became a JSON-RPC error.
-- `validate_tool_names: true` option for `use Urchin.Server` enforcing, at compile time, that
-  every literal tool name matches `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` (default `false`).
 - `:sse_buffer_limit` transport option (default `nil`, preserving the session's internal
   default of `100`) forwarding the per-session GET-stream replay buffer size to the session;
   previously only configurable on `Urchin.Session` directly.
 
 ### Changed
 
+The following are now enforced by default, with no opt-out, for MCP spec compliance. They are
+breaking relative to `0.2.0`.
+
+- `tools/call` arguments are validated against each tool's `input_schema` before the handler
+  runs; a mismatch is returned as a `CallToolResult` with `isError: true` so the model can
+  self-correct. A tool that declares no `input_schema` now defaults to an object that accepts
+  no properties (`additionalProperties: false`), so unexpected arguments are rejected — declare
+  an explicit `input_schema` to accept arbitrary fields. A non-object `arguments` value is a
+  malformed request and remains a JSON-RPC `invalid_params` error. `Urchin.Schema` implements
+  the supported (minimal) JSON Schema subset.
+- Operation requests received before the client sends `notifications/initialized` are rejected
+  with `invalid_request`; only `ping` and `logging/setLevel` are allowed before initialization.
+  Clients must complete the lifecycle handshake before issuing other requests.
+- A `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
+  `isError: true` so the model can self-correct. A protocol error returned as
+  `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
+  became a JSON-RPC internal error.)
+- Tool names are validated at compile time: every literal name must match
+  `~r/\A[a-zA-Z0-9_.-]{1,128}\z/`, and duplicate names within a server are rejected (a silently
+  shadowed duplicate was previously accepted, with the last declaration winning).
+- `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`
+  (with a string `name` and `version`); a missing or mistyped field is an `invalid_params`
+  error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a
+  string `name` and `version`.
+- The `MCP-Protocol-Version` header is validated on `DELETE`, matching `POST` and `GET`.
+- `completion/complete` results are capped at 100 values; a handler returning more is truncated
+  to the top 100 (already ranked by relevance) with `hasMore` set.
 - `logging/setLevel` is now a library builtin: when the server advertises the `logging`
   capability (via `use Urchin.Server, logging: true`) it succeeds and applies the level to the
   session even without a `set_log_level/2` callback. The level is validated against the MCP log
@@ -63,8 +76,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Duplicate tool names declared via the DSL are now rejected at compile time (a silently
-  shadowed duplicate was previously accepted, with the last declaration winning).
 - README no longer claims unqualified "resumable SSE streams"; resumption is scoped to the
   GET stream, matching the implementation.
 

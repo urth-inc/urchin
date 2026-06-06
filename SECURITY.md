@@ -19,8 +19,8 @@ and does not protect against, and what you must add before exposing a server pub
   default `false`, opts into the detail for development). Deliberate errors — `Urchin.Error`
   values and `{:error, message}` returns — are not redacted; their `message`/`data` reach the
   client unchanged, so keep secrets and internals out of them. For `tools/call`, a string
-  `{:error, message}` is by default surfaced as a `CallToolResult` with `isError: true` (see
-  `:tool_errors`) rather than a JSON-RPC error.
+  `{:error, message}` is surfaced as a `CallToolResult` with `isError: true` rather than a
+  JSON-RPC error.
 - **Capability-gated server-initiated requests.** `sampling/createMessage`,
   `elicitation/create` and `roots/list` are only sent when the client advertised the
   capability.
@@ -28,8 +28,8 @@ and does not protect against, and what you must add before exposing a server pub
   `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization (only meaningful when `ctx.auth` is populated, typically by `:auth` or an
   upstream `Urchin.Auth.Plug`).
-- **Opt-in argument validation.** `:validate_arguments` checks `tools/call` arguments
-  against each tool's `input_schema`. It is a minimal subset of JSON Schema (see
+- **Argument validation.** `tools/call` arguments are validated against each tool's
+  `input_schema` before the handler runs. It is a minimal subset of JSON Schema (see
   `Urchin.Schema`), so unsupported keywords and `output_schema` are still your handler's
   responsibility.
 - **Bounded request bodies** (`@max_body`, ~8 MB) and a per-request handler timeout.
@@ -51,7 +51,7 @@ Urchin does **not** yet provide these; supply them in your deployment:
 4. **Per-tool authorization beyond scopes.** Declarative `scopes:` covers scope checks;
    add app-specific authorization (ownership, tenancy, row-level access) in handlers via
    `ctx.auth`.
-5. **Full input validation.** Enable `:validate_arguments` for structural checks, but
+5. **Full input validation.** Structural checks against `input_schema` run automatically, but
    validate unsupported JSON Schema keywords, business rules and `output_schema` in your
    handler — `Urchin.Schema` is a minimal subset.
 
