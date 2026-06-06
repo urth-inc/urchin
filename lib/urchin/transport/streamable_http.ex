@@ -37,6 +37,11 @@ defmodule Urchin.Transport.StreamableHTTP do
       `notifications/initialized` with `invalid_request`; `ping` and `logging/setLevel` are
       always allowed (default `false`). The default may be flipped to `true` in a future
       minor release.
+    * `:tool_errors` - how a `tools/call` handler's `{:error, binary}` is surfaced:
+      `:json_rpc` (default) returns it as a JSON-RPC internal error; `:result` returns it as a
+      `CallToolResult` with `isError: true` so the model can self-correct. A protocol error
+      returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Other methods are
+      unaffected.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
@@ -74,6 +79,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       validate_arguments: Keyword.get(opts, :validate_arguments, false),
       enforce_initialized: Keyword.get(opts, :enforce_initialized, false),
+      tool_errors: tool_errors_opt!(opts),
       max_sessions: positive_integer_opt!(opts, :max_sessions),
       session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
       session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
@@ -252,6 +258,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       validate_arguments: config.validate_arguments,
       initialized: snapshot.initialized,
       enforce_initialized: config.enforce_initialized,
+      tool_errors: config.tool_errors
     }
 
     {task_pid, task_ref} =
@@ -522,6 +529,19 @@ defmodule Urchin.Transport.StreamableHTTP do
       other ->
         raise ArgumentError,
               "#{inspect(key)} must be a positive integer or nil, got: #{inspect(other)}"
+    end
+  end
+
+  # :tool_errors selects how a tool handler's {:error, binary} surfaces. Default :json_rpc
+  # keeps the current behavior; :result turns it into an isError tool result. Fail fast on a
+  # bad value at startup, matching how the session-limit options are validated.
+  defp tool_errors_opt!(opts) do
+    case Keyword.get(opts, :tool_errors, :json_rpc) do
+      value when value in [:json_rpc, :result] ->
+        value
+
+      other ->
+        raise ArgumentError, ":tool_errors must be :json_rpc or :result, got: #{inspect(other)}"
     end
   end
 

@@ -220,7 +220,7 @@ defmodule Urchin.Dispatcher do
       %Result.CallTool{} = result -> {:ok, Result.CallTool.to_map(result)}
       {:ok, content} when is_list(content) -> {:ok, %{content: content, isError: false}}
       {:ok, content, opts} when is_list(content) -> {:ok, call_tool_map(content, opts)}
-      other -> normalize_error(other, ctx)
+      other -> tool_error_result(other, ctx)
     end
   rescue
     exception ->
@@ -233,6 +233,16 @@ defmodule Urchin.Dispatcher do
       text = generic_or(ctx, Exception.message(exception), "Tool execution failed")
       {:ok, %{content: [Urchin.Content.text(text)], isError: true}}
   end
+
+  # With tool_errors: :result, a handler's {:error, binary} becomes an isError tool result
+  # (so the model can self-correct) instead of a JSON-RPC error. A protocol-level
+  # {:error, %Error{}} and every other shape still go through normalize_error.
+  defp tool_error_result({:error, message}, %Context{tool_errors: :result})
+       when is_binary(message) do
+    {:ok, %{content: [Urchin.Content.text(message)], isError: true}}
+  end
+
+  defp tool_error_result(other, ctx), do: normalize_error(other, ctx)
 
   defp call_tool_map(content, opts) do
     %{content: content, isError: opts[:is_error] || false}

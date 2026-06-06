@@ -37,6 +37,7 @@ defmodule Urchin.Context do
     validate_arguments: false,
     initialized: false,
     enforce_initialized: false,
+    tool_errors: :json_rpc,
     cancelled_ref: nil
   ]
 
@@ -58,6 +59,7 @@ defmodule Urchin.Context do
           validate_arguments: boolean(),
           initialized: boolean(),
           enforce_initialized: boolean(),
+          tool_errors: :json_rpc | :result,
           cancelled_ref: reference() | nil
         }
 

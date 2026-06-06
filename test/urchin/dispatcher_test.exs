@@ -363,4 +363,27 @@ defmodule Urchin.DispatcherTest do
       assert {:ok, %{tools: _}} = Dispatcher.handle_request(EchoServer, "tools/list", %{}, ctx)
     end
   end
+
+  describe "tool_errors option" do
+    test "default :json_rpc keeps a binary tool error as a JSON-RPC error" do
+      params = %{"name" => "failing", "arguments" => %{}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+      assert error.code == -32_603
+      assert error.message == "tool said no"
+    end
+
+    test ":result turns a binary tool error into an isError result" do
+      ctx = %Context{tool_errors: :result}
+      params = %{"name" => "failing", "arguments" => %{}}
+      assert {:ok, result} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert result == %{content: [%{type: "text", text: "tool said no"}], isError: true}
+    end
+
+    test ":result still passes a protocol error through as a JSON-RPC error" do
+      ctx = %Context{tool_errors: :result}
+      params = %{"name" => "protocol_error", "arguments" => %{}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
+    end
+  end
 end
