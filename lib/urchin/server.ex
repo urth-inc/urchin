@@ -500,9 +500,10 @@ defmodule Urchin.Server do
         if tool.name == name, do: tool.input_schema || %{"type" => "object"}
       end)
 
-    # An input-schema violation is a tool-input error, not a protocol error; the dispatcher shapes
-    # it per :tool_errors (an isError result by default). Unknown-tool and malformed-request errors
-    # stay protocol-level JSON-RPC errors.
+    # By the time args reaches here it is already an object (the dispatcher rejects a non-object
+    # CallToolRequestParams.arguments as a protocol error). What remains is input-schema validation
+    # (missing required field, wrong property type, ...), which is a tool-input error: the dispatcher
+    # shapes it per :tool_errors (an isError result by default), not a JSON-RPC error.
     case Urchin.Schema.validate(schema, args) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_tool_input, reason}}

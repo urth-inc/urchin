@@ -207,19 +207,26 @@ defmodule Urchin.DispatcherTest do
                Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
     end
 
-    test "validates an omitted input_schema as an object (isError result by default)" do
-      # A tool without an input_schema still must receive an object, not a bare value.
+    test "non-object arguments are a protocol error, not a tool input error (tool_errors: :result)" do
+      # CallToolRequestParams.arguments is, when present, an object. A non-object value violates the
+      # request shape, so it stays a JSON-RPC error even under the default :result mode.
       ctx = %Context{validate_arguments: true}
       params = %{"name" => "no_schema", "arguments" => "not-an-object"}
-
-      assert {:ok, %{isError: true}} =
-               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
     end
 
-    test "an omitted-input_schema violation is invalid_params under :json_rpc" do
+    test "non-object arguments are invalid_params under :json_rpc" do
       ctx = %Context{validate_arguments: true, tool_errors: :json_rpc}
       params = %{"name" => "no_schema", "arguments" => "not-an-object"}
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert error.code == -32_602
+    end
+
+    test "non-object arguments are rejected even without argument validation" do
+      # The request-shape check is independent of :validate_arguments.
+      params = %{"name" => "no_schema", "arguments" => ["not", "an", "object"]}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
       assert error.code == -32_602
     end
   end

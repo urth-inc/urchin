@@ -116,7 +116,10 @@ defmodule Urchin.Dispatcher do
     with_callback(server, :call_tool, 3, fn ->
       name = require_string(params, "name")
       args = Map.get(params, "arguments", %{})
-      call_tool_result(server, name, args, %{ctx | progress_token: progress_token(params)})
+
+      with :ok <- require_arguments_object(args) do
+        call_tool_result(server, name, args, %{ctx | progress_token: progress_token(params)})
+      end
     end)
   end
 
@@ -389,6 +392,14 @@ defmodule Urchin.Dispatcher do
       _ -> raise Error.invalid_params(~s(Missing or invalid string param "#{key}"))
     end
   end
+
+  # CallToolRequestParams.arguments is, when present, an object. A non-object value is a malformed
+  # request (CallToolRequest shape violation), not a tool input-schema error, so it stays a
+  # protocol-level JSON-RPC error regardless of :tool_errors.
+  defp require_arguments_object(args) when is_map(args), do: :ok
+
+  defp require_arguments_object(_args),
+    do: {:error, Error.invalid_params("tools/call arguments must be an object")}
 
   defp require_map(params, key) do
     case Map.get(params, key) do

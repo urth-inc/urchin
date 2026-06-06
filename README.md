@@ -347,7 +347,7 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
-| `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` before the handler runs; a mismatch is surfaced per `:tool_errors` (an `isError` result by default). See `Urchin.Schema` |
+| `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` before the handler runs; a mismatch is surfaced per `:tool_errors` (an `isError` result by default). A non-object `arguments` is a malformed request and is always a JSON-RPC `invalid_params` error, regardless of this option or `:tool_errors`. See `Urchin.Schema` |
 | `:enforce_initialized` | `false` | reject operation requests received before `notifications/initialized` with `invalid_request`; only `ping` is allowed |
 | `:tool_errors` | `:result` | how a `tools/call` handler's `{:error, binary}` is surfaced: `:result` returns a `CallToolResult` with `isError: true` so the model can self-correct; `:json_rpc` returns a JSON-RPC internal error. `{:error, %Urchin.Error{}}` is always a JSON-RPC error; other methods are unaffected |
 | `:sse_buffer_limit` | `nil` | max recent GET-stream (general SSE) events kept per session for resumption replay (`nil` keeps the session default of `100`) |
