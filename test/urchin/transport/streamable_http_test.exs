@@ -432,6 +432,44 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert body["result"]["isError"] == true
       assert body["result"]["content"] == [%{"type" => "text", "text" => "tool said no"}]
     end
+
+    test "with tool_errors: :json_rpc a handler {:error, message} becomes a JSON-RPC error" do
+      json_rpc_opts = StreamableHTTP.init(server: EchoServer, tool_errors: :json_rpc)
+      {session_id, _} = init_session()
+
+      conn =
+        post(
+          %{
+            jsonrpc: "2.0",
+            id: 21,
+            method: "tools/call",
+            params: %{name: "failing", arguments: %{}}
+          },
+          [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}],
+          json_rpc_opts
+        )
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"]["code"] == -32_603
+      assert body["error"]["message"] == "tool said no"
+      refute Map.has_key?(body, "result")
+    end
+  end
+
+  describe "tool_errors option validation" do
+    test "defaults to :result and accepts :json_rpc" do
+      assert %{tool_errors: :result} = StreamableHTTP.init(server: EchoServer)
+
+      assert %{tool_errors: :json_rpc} =
+               StreamableHTTP.init(server: EchoServer, tool_errors: :json_rpc)
+    end
+
+    test "rejects an unknown value" do
+      assert_raise ArgumentError, fn ->
+        StreamableHTTP.init(server: EchoServer, tool_errors: :bad)
+      end
+    end
   end
 
   describe "logging/setLevel over the transport" do
