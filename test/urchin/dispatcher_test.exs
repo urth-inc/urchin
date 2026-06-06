@@ -14,12 +14,27 @@ defmodule Urchin.DispatcherTest.LoggingServer do
   end
 end
 
+defmodule Urchin.DispatcherTest.NoLoggingServer do
+  @moduledoc false
+  # Advertises no logging capability.
+  use Urchin.Server, name: "no-logging", version: "1.0.0"
+end
+
+defmodule Urchin.DispatcherTest.FailingLoggingServer do
+  @moduledoc false
+  # Advertises logging (via the callback) but the set_log_level/2 hook always fails.
+  use Urchin.Server, name: "failing-logging", version: "1.0.0"
+
+  @impl true
+  def set_log_level(_level, _ctx), do: {:error, "nope"}
+end
+
 defmodule Urchin.DispatcherTest do
   use ExUnit.Case, async: true
 
   alias Urchin.{Context, Dispatcher, Session}
   alias Urchin.Test.EchoServer
-  alias Urchin.DispatcherTest.LoggingServer
+  alias Urchin.DispatcherTest.{LoggingServer, NoLoggingServer, FailingLoggingServer}
 
   defp ctx, do: %Context{}
 
@@ -327,6 +342,52 @@ defmodule Urchin.DispatcherTest do
 
       assert_received {:set_log_level_called, "info"}
     end
+
+    test "rejects an invalid level with -32602 and leaves the session unchanged" do
+      {:ok, _id, pid} = Session.start(server: EchoServer, protocol_version: "2025-11-25")
+      on_exit(fn -> Session.terminate(pid) end)
+
+      assert {:error, error} =
+               Dispatcher.handle_request(
+                 EchoServer,
+                 "logging/setLevel",
+                 %{"level" => "verbose"},
+                 %Context{session: pid}
+               )
+
+      assert error.code == -32_602
+      assert Session.snapshot(pid).min_log_level != "verbose"
+    end
+
+    test "is not available unless the server advertises the logging capability" do
+      assert {:error, error} =
+               Dispatcher.handle_request(
+                 NoLoggingServer,
+                 "logging/setLevel",
+                 %{"level" => "info"},
+                 ctx()
+               )
+
+      assert error.code == -32_601
+    end
+
+    test "leaves the session unchanged when the set_log_level/2 hook fails" do
+      {:ok, _id, pid} =
+        Session.start(server: FailingLoggingServer, protocol_version: "2025-11-25")
+
+      on_exit(fn -> Session.terminate(pid) end)
+      before = Session.snapshot(pid).min_log_level
+
+      assert {:error, _error} =
+               Dispatcher.handle_request(
+                 FailingLoggingServer,
+                 "logging/setLevel",
+                 %{"level" => "warning"},
+                 %Context{session: pid}
+               )
+
+      assert Session.snapshot(pid).min_log_level == before
+    end
   end
 
   describe "initialized gating" do
@@ -346,16 +407,18 @@ defmodule Urchin.DispatcherTest do
       assert {:ok, %{}} = Dispatcher.handle_request(EchoServer, "ping", %{}, ctx)
     end
 
-    test "allows logging/setLevel before initialized when enforced" do
+    test "rejects logging/setLevel before initialized when enforced (only ping is allowed)" do
       ctx = %Context{enforce_initialized: true, initialized: false}
 
-      assert {:ok, %{}} =
+      assert {:error, error} =
                Dispatcher.handle_request(
                  EchoServer,
                  "logging/setLevel",
                  %{"level" => "info"},
                  ctx
                )
+
+      assert error.code == -32_600
     end
 
     test "allows operation requests once initialized" do

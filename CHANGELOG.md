@@ -34,8 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
 - `:enforce_initialized` transport option (default `false`) rejecting operation requests
   received before the client sends `notifications/initialized` with `invalid_request`;
-  `ping` and `logging/setLevel` are always allowed. The default may be flipped to `true` in
-  a future minor release.
+  only `ping` is allowed. The default may be flipped to `true` in a future minor release.
 - `:tool_errors` transport option (`:json_rpc` default | `:result`). With `:result`, a
   `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
   `isError: true` so the model can self-correct, instead of a JSON-RPC internal error. A
@@ -48,10 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `logging/setLevel` is now a library builtin: advertising the `logging` capability (via
-  `use Urchin.Server, logging: true`) makes `logging/setLevel` succeed and apply the level to
-  the session even when the server does not export `set_log_level/2`. An exported
-  `set_log_level/2` is still invoked as a hook.
+- `logging/setLevel` is now a library builtin: when the server advertises the `logging`
+  capability (via `use Urchin.Server, logging: true`) it succeeds and applies the level to the
+  session even without a `set_log_level/2` callback. The level is validated against the MCP log
+  levels (`invalid_params` otherwise), an exported `set_log_level/2` still runs as a hook, and
+  the session level is updated only after the hook succeeds. Servers that do not advertise
+  `logging` return `method_not_found`.
 
 ### Fixed
 

@@ -34,9 +34,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       `input_schema` (DSL tools) before the handler runs, rejecting a mismatch with
       `invalid_params` (default `false`). See `Urchin.Schema` for the supported subset.
     * `:enforce_initialized` - reject operation requests received before the client has sent
-      `notifications/initialized` with `invalid_request`; `ping` and `logging/setLevel` are
-      always allowed (default `false`). The default may be flipped to `true` in a future
-      minor release.
+      `notifications/initialized` with `invalid_request`; only `ping` is allowed (default
+      `false`). The default may be flipped to `true` in a future minor release.
     * `:tool_errors` - how a `tools/call` handler's `{:error, binary}` is surfaced:
       `:json_rpc` (default) returns it as a JSON-RPC internal error; `:result` returns it as a
       `CallToolResult` with `isError: true` so the model can self-correct. A protocol error

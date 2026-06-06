@@ -65,6 +65,10 @@ defmodule Urchin.Context do
 
   @default_request_timeout 30_000
 
+  @doc "Returns the valid MCP log levels, in increasing severity order."
+  @spec log_levels() :: [String.t()]
+  def log_levels, do: @log_levels
+
   @doc "Returns the user state established by `c:Urchin.Server.init/1`."
   @spec state(t()) :: term()
   def state(%__MODULE__{state: state}), do: state

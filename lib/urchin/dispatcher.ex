@@ -65,7 +65,7 @@ defmodule Urchin.Dispatcher do
 
   def handle_request(server, method, params, ctx) do
     # Lifecycle gate: when enforce_initialized is on and notifications/initialized has not been
-    # received, reject operation requests other than ping and logging with invalid_request.
+    # received, reject operation requests other than ping with invalid_request.
     with :ok <- check_initialized(method, ctx) do
       do_handle(server, method, params, ctx)
     end
@@ -98,9 +98,9 @@ defmodule Urchin.Dispatcher do
     end
   end
 
-  # ping and logging are allowed before initialization completes (per the MCP lifecycle).
+  # Only ping is allowed before the client sends notifications/initialized; per the MCP
+  # lifecycle a client should not send other requests until initialization completes.
   defp pre_init_allowed?("ping"), do: true
-  defp pre_init_allowed?("logging/setLevel"), do: true
   defp pre_init_allowed?(_method), do: false
 
   # ping is always available regardless of declared capabilities.
@@ -195,16 +195,19 @@ defmodule Urchin.Dispatcher do
   end
 
   defp do_handle(server, "logging/setLevel", params, ctx) do
-    level = require_string(params, "level")
+    # logging/setLevel is a library builtin, available only when the server advertises the
+    # logging capability. The level is validated, the optional set_log_level/2 hook runs, and
+    # the session level is updated only after both succeed, so a failed call leaves no change.
+    if logging_advertised?(server) do
+      level = require_string(params, "level")
 
-    # logging/setLevel is a library builtin: apply the level to the session first, then call
-    # the server's set_log_level/2 as an optional hook when it is defined.
-    set_session_log_level(ctx, level)
-
-    if exported?(server, :set_log_level, 2) do
-      empty_result(server.set_log_level(level, ctx), ctx)
+      with :ok <- validate_log_level(level),
+           :ok <- run_log_level_hook(server, level, ctx) do
+        set_session_log_level(ctx, level)
+        {:ok, %{}}
+      end
     else
-      {:ok, %{}}
+      {:error, Error.method_not_found("Server does not support logging/setLevel")}
     end
   end
 
@@ -314,6 +317,30 @@ defmodule Urchin.Dispatcher do
   end
 
   defp set_session_log_level(_ctx, _level), do: :ok
+
+  # logging/setLevel is offered only when the server advertises the logging capability.
+  defp logging_advertised?(server), do: Map.has_key?(capabilities(server), :logging)
+
+  defp validate_log_level(level) do
+    if level in Context.log_levels() do
+      :ok
+    else
+      {:error, Error.invalid_params("Invalid log level: " <> level)}
+    end
+  end
+
+  # Runs the optional set_log_level/2 hook; a missing hook is a no-op success.
+  defp run_log_level_hook(server, level, ctx) do
+    if exported?(server, :set_log_level, 2) do
+      case server.set_log_level(level, ctx) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        other -> normalize_error(other, ctx)
+      end
+    else
+      :ok
+    end
+  end
 
   defp capabilities(server) do
     if exported?(server, :capabilities, 0), do: server.capabilities(), else: %{}
