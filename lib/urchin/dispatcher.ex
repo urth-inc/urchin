@@ -319,7 +319,11 @@ defmodule Urchin.Dispatcher do
   defp set_session_log_level(_ctx, _level), do: :ok
 
   # logging/setLevel is offered only when the server advertises the logging capability.
-  defp logging_advertised?(server), do: Map.has_key?(capabilities(server), :logging)
+  # Accept both atom (DSL-derived) and string (hand-written, JSON-shaped) capability keys.
+  defp logging_advertised?(server) do
+    caps = capabilities(server)
+    Map.has_key?(caps, :logging) or Map.has_key?(caps, "logging")
+  end
 
   defp validate_log_level(level) do
     if level in Context.log_levels() do
