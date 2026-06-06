@@ -411,4 +411,77 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       Urchin.Session.terminate(pid)
     end
   end
+
+  describe "tool_errors over the transport" do
+    test "a handler {:error, message} becomes an isError result by default" do
+      {session_id, _} = init_session()
+
+      conn =
+        call_with_session(
+          %{
+            jsonrpc: "2.0",
+            id: 20,
+            method: "tools/call",
+            params: %{name: "failing", arguments: %{}}
+          },
+          session_id
+        )
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["result"]["isError"] == true
+      assert body["result"]["content"] == [%{"type" => "text", "text" => "tool said no"}]
+    end
+  end
+
+  describe "logging/setLevel over the transport" do
+    test "updates the session min_log_level" do
+      {session_id, _} = init_session()
+      pid = Urchin.Session.whereis(session_id)
+
+      conn =
+        call_with_session(
+          %{jsonrpc: "2.0", id: 21, method: "logging/setLevel", params: %{level: "error"}},
+          session_id
+        )
+
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["result"] == %{}
+      assert Urchin.Session.snapshot(pid).min_log_level == "error"
+    end
+  end
+
+  describe "enforce_initialized notifications" do
+    test "client notifications are accepted with 202 before initialized" do
+      opts = StreamableHTTP.init(server: EchoServer, enforce_initialized: true)
+
+      init =
+        post(
+          %{
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
+          },
+          [],
+          opts
+        )
+
+      [session_id] = get_resp_header(init, "mcp-session-id")
+      headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
+
+      cancelled =
+        post(
+          %{jsonrpc: "2.0", method: "notifications/cancelled", params: %{requestId: "x"}},
+          headers,
+          opts
+        )
+
+      assert cancelled.status == 202
+    end
+  end
 end
