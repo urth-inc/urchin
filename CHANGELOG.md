@@ -25,7 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
   malformed handler returns are now logged in full but return a generic message to the
   client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
-  values and `{:error, message}` returns still pass through unchanged.
+  values and `{:error, message}` returns are never redacted — their `message`/`data` reach the
+  client unchanged. Whether a `tools/call` string error is delivered as a JSON-RPC error or an
+  `isError` result is governed separately by `:tool_errors` (see below).
 - Capability guards: `Urchin.Context.create_message/3`, `elicit/3` and `list_roots/2`
   return an error without contacting the client when it did not advertise the matching
   `sampling`/`elicitation`/`roots` capability.

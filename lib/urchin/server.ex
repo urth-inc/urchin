@@ -53,8 +53,12 @@ defmodule Urchin.Server do
     * `read_resource/2`: `{:ok, contents}` or `{:error, reason}`
     * `get_prompt/3`: `{:ok, messages}` or `{:ok, messages, description}`
 
-  Any `{:error, reason}` where `reason` is a string or `Urchin.Error` becomes a JSON-RPC
-  error; raised exceptions become internal errors.
+  For every callback, an `{:error, %Urchin.Error{}}` becomes that JSON-RPC error. For
+  `call_tool/3`, an `{:error, binary}` (and a raised exception) is by default surfaced as a
+  `CallToolResult` with `isError: true` so the model can self-correct; set the transport's
+  `:tool_errors` to `:json_rpc` for the legacy behavior of returning a JSON-RPC internal error.
+  For the other callbacks an `{:error, binary}` becomes a JSON-RPC internal error, and raised
+  exceptions become internal errors.
   """
 
   alias Urchin.{Context, Error}

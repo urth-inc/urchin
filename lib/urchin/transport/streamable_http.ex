@@ -551,9 +551,10 @@ defmodule Urchin.Transport.StreamableHTTP do
     end
   end
 
-  # :tool_errors selects how a tool handler's {:error, binary} surfaces. Default :json_rpc
-  # keeps the current behavior; :result turns it into an isError tool result. Fail fast on a
-  # bad value at startup, matching how the session-limit options are validated.
+  # :tool_errors selects how a tool handler's {:error, binary} surfaces. Default :result returns
+  # it as an isError CallToolResult (spec-compliant, lets the model self-correct); :json_rpc is the
+  # opt-in legacy mode that returns a JSON-RPC internal error instead. Fail fast on a bad value at
+  # startup, matching how the session-limit options are validated.
   defp tool_errors_opt!(opts) do
     case Keyword.get(opts, :tool_errors, :result) do
       value when value in [:json_rpc, :result] ->

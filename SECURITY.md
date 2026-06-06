@@ -17,8 +17,10 @@ and does not protect against, and what you must add before exposing a server pub
 - **Error redaction.** Unexpected exceptions and malformed handler returns are logged in
   full and replaced with a generic message before reaching clients (`:expose_internal_errors`,
   default `false`, opts into the detail for development). Deliberate errors — `Urchin.Error`
-  values and `{:error, message}` returns — pass through unchanged, so keep secrets and
-  internals out of their `message`/`data`.
+  values and `{:error, message}` returns — are not redacted; their `message`/`data` reach the
+  client unchanged, so keep secrets and internals out of them. For `tools/call`, a string
+  `{:error, message}` is by default surfaced as a `CallToolResult` with `isError: true` (see
+  `:tool_errors`) rather than a JSON-RPC error.
 - **Capability-gated server-initiated requests.** `sampling/createMessage`,
   `elicitation/create` and `roots/list` are only sent when the client advertised the
   capability.

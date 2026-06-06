@@ -287,7 +287,10 @@ tool "delete", description: "Delete a file" do
   if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "files:write") do
     {:ok, [Urchin.Content.text("deleted")]}
   else
-    {:error, "files:write scope required"}
+    # Return an Urchin.Error so the denial is a JSON-RPC `invalid_request`, matching the
+    # declarative `scopes:` path. A bare string `{:error, "..."}` would instead surface as a
+    # `CallToolResult` with `isError: true` under the default `tool_errors: :result`.
+    {:error, Urchin.Error.invalid_request("files:write scope required")}
   end
 end
 ```
@@ -345,6 +348,9 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
 | `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` (see `Urchin.Schema`) |
+| `:enforce_initialized` | `false` | reject operation requests received before `notifications/initialized` with `invalid_request`; only `ping` is allowed |
+| `:tool_errors` | `:result` | how a `tools/call` handler's `{:error, binary}` is surfaced: `:result` returns a `CallToolResult` with `isError: true` so the model can self-correct; `:json_rpc` returns a JSON-RPC internal error. `{:error, %Urchin.Error{}}` is always a JSON-RPC error; other methods are unaffected |
+| `:sse_buffer_limit` | `nil` | max recent GET-stream (general SSE) events kept per session for resumption replay (`nil` keeps the session default of `100`) |
 | `:max_sessions` | `nil` | reject new sessions with `503` past this many, atomically and before the server's `init/1` runs (`nil` = unlimited) |
 | `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity; a session serving a request is not reaped (`nil` = never) |
 | `:session_max_lifetime` | `nil` | terminate a session this many ms after creation regardless of activity; set above your longest tool run (`nil` = never) |
