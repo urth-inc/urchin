@@ -116,7 +116,11 @@ defmodule Urchin.Session do
 
   @doc "Sets the minimum log level the client wishes to receive."
   @spec set_log_level(pid(), String.t()) :: :ok
-  def set_log_level(pid, level), do: GenServer.cast(pid, {:set_log_level, level})
+  def set_log_level(pid, level), do: GenServer.call(pid, {:set_log_level, level})
+
+  @doc "Marks the session initialized synchronously (after notifications/initialized)."
+  @spec mark_initialized(pid()) :: :ok
+  def mark_initialized(pid), do: GenServer.call(pid, :mark_initialized)
 
   @doc "Registers (or replaces) the GET general stream, returning events to replay."
   @spec register_general_stream(pid(), pid(), {String.t(), non_neg_integer()} | nil) ::
@@ -201,6 +205,14 @@ defmodule Urchin.Session do
     {:reply, snapshot, touch(state)}
   end
 
+  def handle_call(:mark_initialized, _from, state) do
+    {:reply, :ok, touch(%{state | initialized: true})}
+  end
+
+  def handle_call({:set_log_level, level}, _from, state) do
+    {:reply, :ok, %{state | min_log_level: level}}
+  end
+
   def handle_call({:start_request, request_id, task_pid, owner_pid}, _from, state) do
     seq = state.post_seq + 1
     stream_id = "p" <> Integer.to_string(seq)
@@ -267,10 +279,6 @@ defmodule Urchin.Session do
 
   def handle_cast({:cancel_outbound, id}, state) do
     {:noreply, %{state | outbound: drop_outbound(state.outbound, id)}}
-  end
-
-  def handle_cast({:set_log_level, level}, state) do
-    {:noreply, %{state | min_log_level: level}}
   end
 
   def handle_cast({:subscribe, uri}, state) do

@@ -77,4 +77,12 @@ defmodule Urchin.SessionLifecycleTest do
 
     Session.terminate(pid)
   end
+
+  test "mark_initialized/1 synchronously sets initialized" do
+    {:ok, _id, pid} = start([])
+    refute Session.snapshot(pid).initialized
+    assert :ok = Session.mark_initialized(pid)
+    assert Session.snapshot(pid).initialized
+    Session.terminate(pid)
+  end
 end

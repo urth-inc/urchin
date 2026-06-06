@@ -225,6 +225,18 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   # Notifications and responses are acknowledged with 202 and routed into the session.
+  # notifications/initialized is committed synchronously so that, once the client has the
+  # 202, a subsequent request always observes initialized: true in the session snapshot.
+  defp route_session_message(
+         conn,
+         _config,
+         session_pid,
+         {:notification, "notifications/initialized", _params}
+       ) do
+    :ok = Session.mark_initialized(session_pid)
+    send_resp(conn, 202, "")
+  end
+
   defp route_session_message(conn, _config, session_pid, {:notification, _m, _p} = msg) do
     Session.handle_client_message(session_pid, msg)
     send_resp(conn, 202, "")
