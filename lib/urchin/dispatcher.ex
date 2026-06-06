@@ -223,6 +223,7 @@ defmodule Urchin.Dispatcher do
       %Result.CallTool{} = result -> {:ok, Result.CallTool.to_map(result)}
       {:ok, content} when is_list(content) -> {:ok, %{content: content, isError: false}}
       {:ok, content, opts} when is_list(content) -> {:ok, call_tool_map(content, opts)}
+      {:error, {:invalid_tool_input, reason}} -> invalid_tool_input(reason, ctx)
       other -> tool_error_result(other, ctx)
     end
   rescue
@@ -246,6 +247,15 @@ defmodule Urchin.Dispatcher do
   end
 
   defp tool_error_result(other, ctx), do: normalize_error(other, ctx)
+
+  # An input-schema validation failure (:validate_arguments) is a tool-execution error per the MCP
+  # tool error semantics: with tool_errors: :result it is an isError CallToolResult so the model can
+  # self-correct; with :json_rpc it stays a JSON-RPC invalid_params error (the legacy behavior).
+  defp invalid_tool_input(reason, %Context{tool_errors: :result}) do
+    {:ok, %{content: [Urchin.Content.text(reason)], isError: true}}
+  end
+
+  defp invalid_tool_input(reason, _ctx), do: {:error, Error.invalid_params(reason)}
 
   defp call_tool_map(content, opts) do
     %{content: content, isError: opts[:is_error] || false}

@@ -174,8 +174,17 @@ defmodule Urchin.DispatcherTest do
   end
 
   describe "argument validation" do
-    test "rejects arguments that violate the input schema when enabled" do
+    test "an input-schema violation is an isError tool result by default (tool_errors: :result)" do
       ctx = %Context{validate_arguments: true}
+      params = %{"name" => "add", "arguments" => %{"a" => 1}}
+      assert {:ok, result} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+      assert result.isError == true
+      assert [%{type: "text", text: text}] = result.content
+      assert text =~ "b"
+    end
+
+    test "an input-schema violation is a JSON-RPC invalid_params error under :json_rpc" do
+      ctx = %Context{validate_arguments: true, tool_errors: :json_rpc}
       params = %{"name" => "add", "arguments" => %{"a" => 1}}
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
       assert error.code == -32_602
@@ -198,9 +207,17 @@ defmodule Urchin.DispatcherTest do
                Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
     end
 
-    test "validates an omitted input_schema as an object" do
+    test "validates an omitted input_schema as an object (isError result by default)" do
       # A tool without an input_schema still must receive an object, not a bare value.
       ctx = %Context{validate_arguments: true}
+      params = %{"name" => "no_schema", "arguments" => "not-an-object"}
+
+      assert {:ok, %{isError: true}} =
+               Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
+    end
+
+    test "an omitted-input_schema violation is invalid_params under :json_rpc" do
+      ctx = %Context{validate_arguments: true, tool_errors: :json_rpc}
       params = %{"name" => "no_schema", "arguments" => "not-an-object"}
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx)
       assert error.code == -32_602

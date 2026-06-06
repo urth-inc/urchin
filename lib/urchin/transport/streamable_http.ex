@@ -31,8 +31,9 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
     * `:validate_arguments` - validate `tools/call` arguments against each tool's
-      `input_schema` (DSL tools) before the handler runs, rejecting a mismatch with
-      `invalid_params` (default `false`). See `Urchin.Schema` for the supported subset.
+      `input_schema` (DSL tools) before the handler runs (default `false`). A mismatch is a
+      tool-input error surfaced per `:tool_errors`: an `isError` `CallToolResult` by default, or a
+      JSON-RPC `invalid_params` error under `:json_rpc`. See `Urchin.Schema` for the subset.
     * `:enforce_initialized` - reject operation requests received before the client has sent
       `notifications/initialized` with `invalid_request`; only `ping` is allowed (default
       `false`). The default may be flipped to `true` in a future minor release.

@@ -53,12 +53,12 @@ defmodule Urchin.Server do
     * `read_resource/2`: `{:ok, contents}` or `{:error, reason}`
     * `get_prompt/3`: `{:ok, messages}` or `{:ok, messages, description}`
 
-  For every callback, an `{:error, %Urchin.Error{}}` becomes that JSON-RPC error. For
-  `call_tool/3`, an `{:error, binary}` (and a raised exception) is by default surfaced as a
-  `CallToolResult` with `isError: true` so the model can self-correct; set the transport's
-  `:tool_errors` to `:json_rpc` for the legacy behavior of returning a JSON-RPC internal error.
-  For the other callbacks an `{:error, binary}` becomes a JSON-RPC internal error, and raised
-  exceptions become internal errors.
+  For every callback, an `{:error, %Urchin.Error{}}` becomes that JSON-RPC error. A `call_tool/3`
+  handler's `{:error, binary}` is by default surfaced as a `CallToolResult` with `isError: true`
+  so the model can self-correct; set the transport's `:tool_errors` to `:json_rpc` to return a
+  JSON-RPC internal error instead. A tool that raises is always reported as an `isError`
+  `CallToolResult`, regardless of `:tool_errors`. For the other callbacks an `{:error, binary}`
+  becomes a JSON-RPC internal error and a raised exception becomes an internal error.
   """
 
   alias Urchin.{Context, Error}
@@ -489,7 +489,7 @@ defmodule Urchin.Server do
 
   @doc false
   @spec __validate_tool_args__(String.t(), map(), Context.t(), [Urchin.Tool.t()]) ::
-          :ok | {:error, Urchin.Error.t()}
+          :ok | {:error, {:invalid_tool_input, String.t()}}
   def __validate_tool_args__(_name, _args, %Context{validate_arguments: false}, _tools), do: :ok
 
   def __validate_tool_args__(name, args, _ctx, tools) do
@@ -500,9 +500,12 @@ defmodule Urchin.Server do
         if tool.name == name, do: tool.input_schema || %{"type" => "object"}
       end)
 
+    # An input-schema violation is a tool-input error, not a protocol error; the dispatcher shapes
+    # it per :tool_errors (an isError result by default). Unknown-tool and malformed-request errors
+    # stay protocol-level JSON-RPC errors.
     case Urchin.Schema.validate(schema, args) do
       :ok -> :ok
-      {:error, reason} -> {:error, Urchin.Error.invalid_params(reason)}
+      {:error, reason} -> {:error, {:invalid_tool_input, reason}}
     end
   end
 

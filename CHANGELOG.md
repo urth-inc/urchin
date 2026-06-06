@@ -20,8 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization.
 - `:validate_arguments` transport option (default `false`) validates `tools/call` arguments
-  against each DSL tool's `input_schema` and rejects a mismatch with `invalid_params` before
-  the handler runs. `Urchin.Schema` implements the supported (minimal) JSON Schema subset.
+  against each DSL tool's `input_schema` before the handler runs. A mismatch is treated as a
+  tool-input error: surfaced as a `CallToolResult` with `isError: true` by default (per
+  `:tool_errors`), or a JSON-RPC `invalid_params` error under `tool_errors: :json_rpc`.
+  `Urchin.Schema` implements the supported (minimal) JSON Schema subset.
 - `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
   malformed handler returns are now logged in full but return a generic message to the
   client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
