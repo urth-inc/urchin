@@ -36,7 +36,7 @@ defmodule Urchin.Server do
 
   Duplicate tool names declared via the DSL are rejected at compile time. Pass
   `validate_tool_names: true` to `use Urchin.Server` to additionally enforce that every literal
-  tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`); a non-matching name raises
+  tool name matches `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` (default `false`); a non-matching name raises
   `ArgumentError`.
 
   ## Behaviour
@@ -62,7 +62,7 @@ defmodule Urchin.Server do
   # Constrained tool-name charset. The MCP schema imposes no pattern, but this is the
   # de-facto convention shared by common tool-calling SDKs; dots and dashes are permitted
   # for namespacing. Enforced only when the server opts in via :validate_tool_names.
-  @tool_name_pattern ~r/^[a-zA-Z0-9_.-]{1,128}$/
+  @tool_name_pattern ~r/\A[a-zA-Z0-9_.-]{1,128}\z/
 
   @type cursor :: String.t() | nil
   @type list_result(item) ::

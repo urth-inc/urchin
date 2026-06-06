@@ -50,6 +50,22 @@ defmodule Urchin.ServerTest do
       end
     end
 
+    test "rejects a tool name with a trailing newline at compile time" do
+      source = """
+      defmodule Urchin.ServerTest.NewlineName do
+        use Urchin.Server, name: "nl", version: "1.0.0", validate_tool_names: true
+
+        tool "abc\\n" do
+          {:ok, [Urchin.Content.text("ok")]}
+        end
+      end
+      """
+
+      assert_raise ArgumentError, ~r/tool name .* is invalid/, fn ->
+        Code.compile_string(source)
+      end
+    end
+
     test "rejects duplicate tool names at compile time (always on)" do
       source = """
       defmodule Urchin.ServerTest.DupNames do
