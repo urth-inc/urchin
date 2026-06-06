@@ -64,7 +64,11 @@ defmodule Urchin.Dispatcher do
   end
 
   def handle_request(server, method, params, ctx) do
-    do_handle(server, method, params, ctx)
+    # Lifecycle gate: when enforce_initialized is on and notifications/initialized has not been
+    # received, reject operation requests other than ping and logging with invalid_request.
+    with :ok <- check_initialized(method, ctx) do
+      do_handle(server, method, params, ctx)
+    end
   rescue
     error in Urchin.Error ->
       {:error, error}
@@ -76,6 +80,28 @@ defmodule Urchin.Dispatcher do
       Logger.error("Urchin handler for #{method} threw: #{inspect(value)}")
       {:error, Error.internal_error(generic_or(ctx, "Handler threw: " <> inspect(value)))}
   end
+
+  # The gate is a no-op unless :enforce_initialized is set and the session is not yet
+  # initialized. `notifications/initialized` is a notification routed straight into the
+  # session, so it never reaches this request-only path.
+  defp check_initialized(_method, %Context{enforce_initialized: false}), do: :ok
+  defp check_initialized(_method, %Context{initialized: true}), do: :ok
+
+  defp check_initialized(method, %Context{}) do
+    if pre_init_allowed?(method) do
+      :ok
+    else
+      {:error,
+       Error.invalid_request(
+         "Server not initialized: send notifications/initialized before #{method}"
+       )}
+    end
+  end
+
+  # ping and logging are allowed before initialization completes (per the MCP lifecycle).
+  defp pre_init_allowed?("ping"), do: true
+  defp pre_init_allowed?("logging/setLevel"), do: true
+  defp pre_init_allowed?(_method), do: false
 
   # ping is always available regardless of declared capabilities.
   defp do_handle(_server, "ping", _params, _ctx), do: {:ok, %{}}

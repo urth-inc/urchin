@@ -323,4 +323,44 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert status.("x-application/json") == 415
     end
   end
+
+  describe "enforce_initialized" do
+    test "gates operation requests until notifications/initialized" do
+      opts = StreamableHTTP.init(server: EchoServer, enforce_initialized: true)
+
+      init_conn =
+        post(
+          %{
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
+          },
+          [],
+          opts
+        )
+
+      assert init_conn.status == 200
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+      headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
+
+      # Before notifications/initialized: rejected as invalid_request.
+      before = post(%{jsonrpc: "2.0", id: 2, method: "tools/list"}, headers, opts)
+      assert before.status == 200
+      assert Jason.decode!(before.resp_body)["error"]["code"] == -32_600
+
+      # Acknowledge initialization.
+      ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, headers, opts)
+      assert ack.status == 202
+
+      # After: allowed.
+      after_conn = post(%{jsonrpc: "2.0", id: 3, method: "tools/list"}, headers, opts)
+      assert after_conn.status == 200
+      assert is_list(Jason.decode!(after_conn.resp_body)["result"]["tools"])
+    end
+  end
 end

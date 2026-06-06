@@ -35,6 +35,8 @@ defmodule Urchin.Context do
     min_log_level: "debug",
     expose_internal_errors: false,
     validate_arguments: false,
+    initialized: false,
+    enforce_initialized: false,
     cancelled_ref: nil
   ]
 
@@ -54,6 +56,8 @@ defmodule Urchin.Context do
           min_log_level: String.t(),
           expose_internal_errors: boolean(),
           validate_arguments: boolean(),
+          initialized: boolean(),
+          enforce_initialized: boolean(),
           cancelled_ref: reference() | nil
         }
 

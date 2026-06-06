@@ -328,4 +328,39 @@ defmodule Urchin.DispatcherTest do
       assert_received {:set_log_level_called, "info"}
     end
   end
+
+  describe "initialized gating" do
+    test "does not gate by default even when not initialized" do
+      assert {:ok, %{tools: _}} =
+               Dispatcher.handle_request(EchoServer, "tools/list", %{}, %Context{})
+    end
+
+    test "rejects operation requests before initialized when enforced" do
+      ctx = %Context{enforce_initialized: true, initialized: false}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/list", %{}, ctx)
+      assert error.code == -32_600
+    end
+
+    test "allows ping before initialized when enforced" do
+      ctx = %Context{enforce_initialized: true, initialized: false}
+      assert {:ok, %{}} = Dispatcher.handle_request(EchoServer, "ping", %{}, ctx)
+    end
+
+    test "allows logging/setLevel before initialized when enforced" do
+      ctx = %Context{enforce_initialized: true, initialized: false}
+
+      assert {:ok, %{}} =
+               Dispatcher.handle_request(
+                 EchoServer,
+                 "logging/setLevel",
+                 %{"level" => "info"},
+                 ctx
+               )
+    end
+
+    test "allows operation requests once initialized" do
+      ctx = %Context{enforce_initialized: true, initialized: true}
+      assert {:ok, %{tools: _}} = Dispatcher.handle_request(EchoServer, "tools/list", %{}, ctx)
+    end
+  end
 end

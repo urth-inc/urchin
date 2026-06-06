@@ -33,6 +33,10 @@ defmodule Urchin.Transport.StreamableHTTP do
     * `:validate_arguments` - validate `tools/call` arguments against each tool's
       `input_schema` (DSL tools) before the handler runs, rejecting a mismatch with
       `invalid_params` (default `false`). See `Urchin.Schema` for the supported subset.
+    * `:enforce_initialized` - reject operation requests received before the client has sent
+      `notifications/initialized` with `invalid_request`; `ping` and `logging/setLevel` are
+      always allowed (default `false`). The default may be flipped to `true` in a future
+      minor release.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
@@ -69,6 +73,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
       validate_arguments: Keyword.get(opts, :validate_arguments, false),
+      enforce_initialized: Keyword.get(opts, :enforce_initialized, false),
       max_sessions: positive_integer_opt!(opts, :max_sessions),
       session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
       session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
@@ -244,7 +249,9 @@ defmodule Urchin.Transport.StreamableHTTP do
       auth: conn_auth(conn),
       min_log_level: snapshot.min_log_level,
       expose_internal_errors: config.expose_internal_errors,
-      validate_arguments: config.validate_arguments
+      validate_arguments: config.validate_arguments,
+      initialized: snapshot.initialized,
+      enforce_initialized: config.enforce_initialized,
     }
 
     {task_pid, task_ref} =

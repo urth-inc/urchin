@@ -32,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `415 Unsupported Media Type` for POST requests whose `Content-Type` is not
   `application/json`.
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
+- `:enforce_initialized` transport option (default `false`) rejecting operation requests
+  received before the client sends `notifications/initialized` with `invalid_request`;
+  `ping` and `logging/setLevel` are always allowed. The default may be flipped to `true` in
+  a future minor release.
 
 ### Changed
 

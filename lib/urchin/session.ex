@@ -194,7 +194,8 @@ defmodule Urchin.Session do
       protocol_version: state.protocol_version,
       client_info: state.client_info,
       client_capabilities: state.client_capabilities,
-      min_log_level: state.min_log_level
+      min_log_level: state.min_log_level,
+      initialized: state.initialized
     }
 
     {:reply, snapshot, touch(state)}
