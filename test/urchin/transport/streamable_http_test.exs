@@ -52,6 +52,11 @@ defmodule Urchin.Transport.StreamableHTTPTest do
 
     assert conn.status == 200
     [session_id] = get_resp_header(conn, "mcp-session-id")
+
+    # Complete the handshake so subsequent operation requests pass the lifecycle gate.
+    ack = call_with_session(%{jsonrpc: "2.0", method: "notifications/initialized"}, session_id)
+    assert ack.status == 202
+
     {session_id, Jason.decode!(conn.resp_body)}
   end
 
@@ -236,7 +241,11 @@ defmodule Urchin.Transport.StreamableHTTPTest do
             jsonrpc: "2.0",
             id: 1,
             method: "initialize",
-            params: %{"protocolVersion" => "2025-11-25", "capabilities" => %{}}
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
           },
           [{"origin", "http://localhost:3000"}]
         )
@@ -324,41 +333,35 @@ defmodule Urchin.Transport.StreamableHTTPTest do
     end
   end
 
-  describe "enforce_initialized" do
+  describe "initialized lifecycle gate" do
     test "gates operation requests until notifications/initialized" do
-      opts = StreamableHTTP.init(server: EchoServer, enforce_initialized: true)
-
       init_conn =
-        post(
-          %{
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: %{
-              "protocolVersion" => "2025-11-25",
-              "capabilities" => %{},
-              "clientInfo" => %{"name" => "c", "version" => "1"}
-            }
-          },
-          [],
-          opts
-        )
+        post(%{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "c", "version" => "1"}
+          }
+        })
 
       assert init_conn.status == 200
       [session_id] = get_resp_header(init_conn, "mcp-session-id")
       headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
 
       # Before notifications/initialized: rejected as invalid_request.
-      before = post(%{jsonrpc: "2.0", id: 2, method: "tools/list"}, headers, opts)
+      before = post(%{jsonrpc: "2.0", id: 2, method: "tools/list"}, headers)
       assert before.status == 200
       assert Jason.decode!(before.resp_body)["error"]["code"] == -32_600
 
       # Acknowledge initialization.
-      ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, headers, opts)
+      ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, headers)
       assert ack.status == 202
 
       # After: allowed.
-      after_conn = post(%{jsonrpc: "2.0", id: 3, method: "tools/list"}, headers, opts)
+      after_conn = post(%{jsonrpc: "2.0", id: 3, method: "tools/list"}, headers)
       assert after_conn.status == 200
       assert is_list(Jason.decode!(after_conn.resp_body)["result"]["tools"])
     end
@@ -412,8 +415,8 @@ defmodule Urchin.Transport.StreamableHTTPTest do
     end
   end
 
-  describe "tool_errors over the transport" do
-    test "a handler {:error, message} becomes an isError result by default" do
+  describe "tool errors over the transport" do
+    test "a handler {:error, message} becomes an isError result" do
       {session_id, _} = init_session()
 
       conn =
@@ -431,44 +434,6 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       body = Jason.decode!(conn.resp_body)
       assert body["result"]["isError"] == true
       assert body["result"]["content"] == [%{"type" => "text", "text" => "tool said no"}]
-    end
-
-    test "with tool_errors: :json_rpc a handler {:error, message} becomes a JSON-RPC error" do
-      json_rpc_opts = StreamableHTTP.init(server: EchoServer, tool_errors: :json_rpc)
-      {session_id, _} = init_session()
-
-      conn =
-        post(
-          %{
-            jsonrpc: "2.0",
-            id: 21,
-            method: "tools/call",
-            params: %{name: "failing", arguments: %{}}
-          },
-          [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}],
-          json_rpc_opts
-        )
-
-      assert conn.status == 200
-      body = Jason.decode!(conn.resp_body)
-      assert body["error"]["code"] == -32_603
-      assert body["error"]["message"] == "tool said no"
-      refute Map.has_key?(body, "result")
-    end
-  end
-
-  describe "tool_errors option validation" do
-    test "defaults to :result and accepts :json_rpc" do
-      assert %{tool_errors: :result} = StreamableHTTP.init(server: EchoServer)
-
-      assert %{tool_errors: :json_rpc} =
-               StreamableHTTP.init(server: EchoServer, tool_errors: :json_rpc)
-    end
-
-    test "rejects an unknown value" do
-      assert_raise ArgumentError, fn ->
-        StreamableHTTP.init(server: EchoServer, tool_errors: :bad)
-      end
     end
   end
 
@@ -489,25 +454,19 @@ defmodule Urchin.Transport.StreamableHTTPTest do
     end
   end
 
-  describe "enforce_initialized notifications" do
+  describe "client notifications before initialized" do
     test "client notifications are accepted with 202 before initialized" do
-      opts = StreamableHTTP.init(server: EchoServer, enforce_initialized: true)
-
       init =
-        post(
-          %{
-            jsonrpc: "2.0",
-            id: 1,
-            method: "initialize",
-            params: %{
-              "protocolVersion" => "2025-11-25",
-              "capabilities" => %{},
-              "clientInfo" => %{"name" => "c", "version" => "1"}
-            }
-          },
-          [],
-          opts
-        )
+        post(%{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "c", "version" => "1"}
+          }
+        })
 
       [session_id] = get_resp_header(init, "mcp-session-id")
       headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
@@ -515,8 +474,7 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       cancelled =
         post(
           %{jsonrpc: "2.0", method: "notifications/cancelled", params: %{requestId: "x"}},
-          headers,
-          opts
+          headers
         )
 
       assert cancelled.status == 202

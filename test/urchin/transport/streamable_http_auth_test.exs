@@ -69,14 +69,20 @@ defmodule Urchin.Transport.StreamableHTTPAuthTest do
     conn = initialize([{"authorization", "Bearer alice-token"}])
     [session_id] = get_resp_header(conn, "mcp-session-id")
 
+    authed = [
+      {"authorization", "Bearer alice-token"},
+      {"mcp-session-id", session_id},
+      {"mcp-protocol-version", "2025-11-25"}
+    ]
+
+    # Complete the handshake so the tool call passes the lifecycle gate.
+    ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, authed)
+    assert ack.status == 202
+
     conn =
       post(
         %{jsonrpc: "2.0", id: 2, method: "tools/call", params: %{name: "whoami", arguments: %{}}},
-        [
-          {"authorization", "Bearer alice-token"},
-          {"mcp-session-id", session_id},
-          {"mcp-protocol-version", "2025-11-25"}
-        ]
+        authed
       )
 
     assert conn.status == 200

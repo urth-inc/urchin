@@ -119,7 +119,7 @@ defmodule Urchin.CoreTest do
       assert decoded == %{
                "name" => "t",
                "description" => "d",
-               "inputSchema" => %{"type" => "object"}
+               "inputSchema" => %{"type" => "object", "additionalProperties" => false}
              }
     end
   end

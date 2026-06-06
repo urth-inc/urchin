@@ -30,24 +30,17 @@ defmodule Urchin.Transport.StreamableHTTP do
       tool run, since it can expire a session mid-request.
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
-    * `:validate_arguments` - validate `tools/call` arguments against each tool's
-      `input_schema` (DSL tools) before the handler runs (default `false`). A mismatch is a
-      tool-input error surfaced per `:tool_errors`: an `isError` `CallToolResult` by default, or a
-      JSON-RPC `invalid_params` error under `:json_rpc`. See `Urchin.Schema` for the subset.
-    * `:enforce_initialized` - reject operation requests received before the client has sent
-      `notifications/initialized` with `invalid_request`; only `ping` is allowed (default
-      `false`). The default may be flipped to `true` in a future minor release.
-    * `:tool_errors` - how a `tools/call` handler's `{:error, binary}` is surfaced:
-      `:result` (default) returns it as a `CallToolResult` with `isError: true` so the model can
-      self-correct (the spec-compliant behavior); `:json_rpc` returns it as a JSON-RPC internal
-      error. A protocol error returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error.
-      Other methods are unaffected.
     * `:sse_buffer_limit` - the maximum number of recent general-stream (GET SSE) events each
       session keeps for resumption replay. Defaults to `nil`, which preserves the session's
       internal default of `100`. A positive integer or `nil`.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
+
+  The transport enforces the spec by default and these behaviors are not configurable: it
+  validates `tools/call` arguments against each tool's input schema, rejects operation requests
+  received before `notifications/initialized` (only `ping` and `logging/setLevel` are allowed
+  pre-init), and surfaces a tool handler's `{:error, binary}` as an `isError` `CallToolResult`.
 
   The plug reads the raw request body itself, so mount it before any JSON body parser.
   """
@@ -80,9 +73,6 @@ defmodule Urchin.Transport.StreamableHTTP do
       request_timeout: Keyword.get(opts, :request_timeout, 60_000),
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
-      validate_arguments: Keyword.get(opts, :validate_arguments, false),
-      enforce_initialized: Keyword.get(opts, :enforce_initialized, false),
-      tool_errors: tool_errors_opt!(opts),
       max_sessions: positive_integer_opt!(opts, :max_sessions),
       session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
       session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
@@ -277,10 +267,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       auth: conn_auth(conn),
       min_log_level: snapshot.min_log_level,
       expose_internal_errors: config.expose_internal_errors,
-      validate_arguments: config.validate_arguments,
-      initialized: snapshot.initialized,
-      enforce_initialized: config.enforce_initialized,
-      tool_errors: config.tool_errors
+      initialized: snapshot.initialized
     }
 
     {task_pid, task_ref} =
@@ -455,13 +442,14 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   defp handle_delete(conn, config) do
-    case lookup_session(conn, config) do
-      {:ok, session_pid} ->
-        Session.terminate(session_pid)
-        send_resp(conn, 204, "")
-
-      {:error, status, error} ->
-        send_error(conn, status, nil, error)
+    # DELETE is a post-initialize request, so it carries the MCP-Protocol-Version header like POST
+    # and GET; validate it before terminating the session.
+    with {:ok, session_pid} <- lookup_session(conn, config),
+         :ok <- check_protocol_version(conn, config) do
+      Session.terminate(session_pid)
+      send_resp(conn, 204, "")
+    else
+      {:error, status, error} -> send_error(conn, status, nil, error)
     end
   end
 
@@ -562,20 +550,6 @@ defmodule Urchin.Transport.StreamableHTTP do
       other ->
         raise ArgumentError,
               "#{inspect(key)} must be a positive integer or nil, got: #{inspect(other)}"
-    end
-  end
-
-  # :tool_errors selects how a tool handler's {:error, binary} surfaces. Default :result returns
-  # it as an isError CallToolResult (spec-compliant, lets the model self-correct); :json_rpc is the
-  # opt-in legacy mode that returns a JSON-RPC internal error instead. Fail fast on a bad value at
-  # startup, matching how the session-limit options are validated.
-  defp tool_errors_opt!(opts) do
-    case Keyword.get(opts, :tool_errors, :result) do
-      value when value in [:json_rpc, :result] ->
-        value
-
-      other ->
-        raise ArgumentError, ":tool_errors must be :json_rpc or :result, got: #{inspect(other)}"
     end
   end
 

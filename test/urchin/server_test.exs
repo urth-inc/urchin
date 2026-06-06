@@ -34,10 +34,10 @@ defmodule Urchin.ServerTest do
   end
 
   describe "tool name validation" do
-    test "rejects an invalid tool name at compile time when opted in" do
+    test "rejects an invalid tool name at compile time" do
       source = """
       defmodule Urchin.ServerTest.BadName do
-        use Urchin.Server, name: "bad", version: "1.0.0", validate_tool_names: true
+        use Urchin.Server, name: "bad", version: "1.0.0"
 
         tool "bad name!" do
           {:ok, [Urchin.Content.text("ok")]}
@@ -53,7 +53,7 @@ defmodule Urchin.ServerTest do
     test "rejects a tool name with a trailing newline at compile time" do
       source = """
       defmodule Urchin.ServerTest.NewlineName do
-        use Urchin.Server, name: "nl", version: "1.0.0", validate_tool_names: true
+        use Urchin.Server, name: "nl", version: "1.0.0"
 
         tool "abc\\n" do
           {:ok, [Urchin.Content.text("ok")]}
@@ -86,10 +86,10 @@ defmodule Urchin.ServerTest do
       end
     end
 
-    test "accepts valid, unique names when opted in" do
+    test "accepts valid, unique names" do
       source = """
       defmodule Urchin.ServerTest.GoodNames do
-        use Urchin.Server, name: "good-names", version: "1.0.0", validate_tool_names: true
+        use Urchin.Server, name: "good-names", version: "1.0.0"
 
         tool "echo" do
           {:ok, [Urchin.Content.text("a")]}
@@ -102,20 +102,6 @@ defmodule Urchin.ServerTest do
       """
 
       assert [{Urchin.ServerTest.GoodNames, _} | _] = Code.compile_string(source)
-    end
-
-    test "does not enforce the name pattern by default" do
-      source = """
-      defmodule Urchin.ServerTest.UncheckedName do
-        use Urchin.Server, name: "unchecked", version: "1.0.0"
-
-        tool "bad name!" do
-          {:ok, [Urchin.Content.text("a")]}
-        end
-      end
-      """
-
-      assert [{Urchin.ServerTest.UncheckedName, _} | _] = Code.compile_string(source)
     end
   end
 end

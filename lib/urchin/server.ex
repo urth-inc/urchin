@@ -34,10 +34,8 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
-  Duplicate tool names declared via the DSL are rejected at compile time. Pass
-  `validate_tool_names: true` to `use Urchin.Server` to additionally enforce that every literal
-  tool name matches `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` (default `false`); a non-matching name raises
-  `ArgumentError`.
+  Duplicate tool names declared via the DSL are rejected at compile time, and every literal tool
+  name must match `~r/\A[a-zA-Z0-9_.-]{1,128}\z/`; a non-matching name raises `ArgumentError`.
 
   ## Behaviour
 
@@ -54,18 +52,16 @@ defmodule Urchin.Server do
     * `get_prompt/3`: `{:ok, messages}` or `{:ok, messages, description}`
 
   For every callback, an `{:error, %Urchin.Error{}}` becomes that JSON-RPC error. A `call_tool/3`
-  handler's `{:error, binary}` is by default surfaced as a `CallToolResult` with `isError: true`
-  so the model can self-correct; set the transport's `:tool_errors` to `:json_rpc` to return a
-  JSON-RPC internal error instead. A tool that raises is always reported as an `isError`
-  `CallToolResult`, regardless of `:tool_errors`. For the other callbacks an `{:error, binary}`
-  becomes a JSON-RPC internal error and a raised exception becomes an internal error.
+  handler's `{:error, binary}` is surfaced as a `CallToolResult` with `isError: true` so the model
+  can self-correct, as is a tool that raises. For the other callbacks an `{:error, binary}` becomes
+  a JSON-RPC internal error and a raised exception becomes an internal error.
   """
 
   alias Urchin.{Context, Error}
 
   # Constrained tool-name charset. The MCP schema imposes no pattern, but this is the
   # de-facto convention shared by common tool-calling SDKs; dots and dashes are permitted
-  # for namespacing. Enforced only when the server opts in via :validate_tool_names.
+  # for namespacing. Enforced for every literal tool name at compile time.
   @tool_name_pattern ~r/\A[a-zA-Z0-9_.-]{1,128}\z/
 
   @type cursor :: String.t() | nil
@@ -261,21 +257,17 @@ defmodule Urchin.Server do
     raise ArgumentError, "tool :scopes must be a list of strings, got: #{inspect(other)}"
   end
 
-  # Duplicate tool names within a server are always rejected at compile time (a silently
-  # shadowed duplicate is a bug). The name-pattern check is opt-in via :validate_tool_names.
-  # Non-literal names (a variable or call) cannot be compared statically and are skipped,
-  # mirroring handler_name/2.
-  defp validate_tool_names!(tool_dispatch, opts) do
+  # Duplicate tool names within a server are rejected at compile time (a silently shadowed
+  # duplicate is a bug), and every literal name must match @tool_name_pattern. Non-literal names
+  # (a variable or call) cannot be compared statically and are skipped, mirroring handler_name/2.
+  defp validate_tool_names!(tool_dispatch) do
     names =
       tool_dispatch
       |> Enum.map(fn {name, _fname, _scopes} -> name end)
       |> Enum.filter(&is_binary/1)
 
     validate_unique_tool_names!(names)
-
-    if Keyword.get(opts, :validate_tool_names, false) do
-      Enum.each(names, &validate_tool_name_pattern!/1)
-    end
+    Enum.each(names, &validate_tool_name_pattern!/1)
 
     :ok
   end
@@ -320,7 +312,7 @@ defmodule Urchin.Server do
     opts = Module.get_attribute(mod, :mcp_opts) || []
 
     tool_dispatch = Module.get_attribute(mod, :mcp_tool_dispatch) || []
-    validate_tool_names!(tool_dispatch, opts)
+    validate_tool_names!(tool_dispatch)
 
     has_tools? = tool_dispatch != []
     has_resources? = Module.get_attribute(mod, :mcp_resources) != []
@@ -490,20 +482,18 @@ defmodule Urchin.Server do
   @doc false
   @spec __validate_tool_args__(String.t(), map(), Context.t(), [Urchin.Tool.t()]) ::
           :ok | {:error, {:invalid_tool_input, String.t()}}
-  def __validate_tool_args__(_name, _args, %Context{validate_arguments: false}, _tools), do: :ok
-
   def __validate_tool_args__(name, args, _ctx, tools) do
-    # Use the same effective schema the wire advertises: an omitted input_schema means an
-    # object, so validation is not silently skipped for a tool that declared no schema.
+    # Use the same effective schema the wire advertises (Tool.default_input_schema/0 when the tool
+    # declared none), so validation is not silently skipped for a tool that declared no schema.
     schema =
       Enum.find_value(tools, fn tool ->
-        if tool.name == name, do: tool.input_schema || %{"type" => "object"}
+        if tool.name == name, do: tool.input_schema || Urchin.Tool.default_input_schema()
       end)
 
     # By the time args reaches here it is already an object (the dispatcher rejects a non-object
     # CallToolRequestParams.arguments as a protocol error). What remains is input-schema validation
     # (missing required field, wrong property type, ...), which is a tool-input error: the dispatcher
-    # shapes it per :tool_errors (an isError result by default), not a JSON-RPC error.
+    # shapes it as an isError CallToolResult, not a JSON-RPC error.
     case Urchin.Schema.validate(schema, args) do
       :ok -> :ok
       {:error, reason} -> {:error, {:invalid_tool_input, reason}}

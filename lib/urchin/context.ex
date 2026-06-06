@@ -34,10 +34,7 @@ defmodule Urchin.Context do
     assigns: %{},
     min_log_level: "debug",
     expose_internal_errors: false,
-    validate_arguments: false,
     initialized: false,
-    enforce_initialized: false,
-    tool_errors: :result,
     cancelled_ref: nil
   ]
 
@@ -56,10 +53,7 @@ defmodule Urchin.Context do
           assigns: map(),
           min_log_level: String.t(),
           expose_internal_errors: boolean(),
-          validate_arguments: boolean(),
           initialized: boolean(),
-          enforce_initialized: boolean(),
-          tool_errors: :json_rpc | :result,
           cancelled_ref: reference() | nil
         }
 

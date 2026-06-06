@@ -3,7 +3,8 @@ defmodule Urchin.Tool do
   A tool definition advertised via `tools/list`.
 
   Mirrors the `Tool` type from the MCP schema. `input_schema` is a JSON Schema object
-  describing the tool arguments; when omitted it defaults to an empty object schema.
+  describing the tool arguments; when omitted it defaults to `default_input_schema/0`, an
+  object that accepts no properties.
   """
 
   alias Urchin.WireFormat
@@ -54,10 +55,17 @@ defmodule Urchin.Tool do
   defp fetch_name!(%{name: name}) when is_binary(name), do: name
   defp fetch_name!(_), do: raise(ArgumentError, "tool requires a string :name")
 
+  @doc """
+  The input schema advertised for a tool that declares none: an object accepting no
+  properties, per the MCP recommendation for parameterless tools.
+  """
+  @spec default_input_schema() :: map()
+  def default_input_schema, do: %{"type" => "object", "additionalProperties" => false}
+
   @doc "Serializes the tool to its JSON-RPC wire shape."
   @spec to_map(t()) :: map()
   def to_map(%__MODULE__{} = tool) do
-    %{name: tool.name, inputSchema: tool.input_schema || %{"type" => "object"}}
+    %{name: tool.name, inputSchema: tool.input_schema || default_input_schema()}
     |> WireFormat.maybe_put(:title, tool.title)
     |> WireFormat.maybe_put(:description, tool.description)
     |> WireFormat.maybe_put(:outputSchema, tool.output_schema)
