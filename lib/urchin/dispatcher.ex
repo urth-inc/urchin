@@ -279,8 +279,14 @@ defmodule Urchin.Dispatcher do
       other -> tool_error_result(other, ctx)
     end
   rescue
+    error in Urchin.Error ->
+      # A deliberately raised Urchin.Error is a protocol-level error, matching a returned
+      # {:error, %Urchin.Error{}}: it stays a JSON-RPC error rather than an isError result.
+      {:error, error}
+
     exception ->
-      # A tool that raises reports a tool-execution error so the model can self-correct.
+      # A tool that raises any other exception reports a tool-execution error so the model
+      # can self-correct.
       Logger.error(
         "Urchin tool #{name} crashed: " <>
           Exception.format(:error, exception, __STACKTRACE__)

@@ -522,5 +522,12 @@ defmodule Urchin.DispatcherTest do
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
       assert error.code == -32_602
     end
+
+    test "a raised Urchin.Error is a JSON-RPC error, not an isError result" do
+      params = %{"name" => "raise_protocol", "arguments" => %{}}
+      assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/call", params, ctx())
+      assert error.code == -32_602
+      assert error.message == "raised bad"
+    end
   end
 end

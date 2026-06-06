@@ -57,6 +57,11 @@ defmodule Urchin.Test.EchoServer do
     {:error, Urchin.Error.invalid_params("bad")}
   end
 
+  tool "raise_protocol", description: "Raises an Urchin.Error protocol error" do
+    _ = {args, ctx}
+    raise Urchin.Error.invalid_params("raised bad")
+  end
+
   tool "secret",
     description: "Requires the secret:read scope",
     scopes: ["secret:read"] do
