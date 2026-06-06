@@ -42,6 +42,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       `CallToolResult` with `isError: true` so the model can self-correct. A protocol error
       returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Other methods are
       unaffected.
+    * `:sse_buffer_limit` - the maximum number of recent general-stream (GET SSE) events each
+      session keeps for resumption replay (default `100`). A positive integer or `nil`.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
@@ -83,6 +85,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       max_sessions: positive_integer_opt!(opts, :max_sessions),
       session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
       session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
+      sse_buffer_limit: positive_integer_opt!(opts, :sse_buffer_limit),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -174,16 +177,20 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   defp start_session(conn, config, id, result, meta, server_state, reservation) do
-    case Session.start(
-           server: config.server,
-           server_state: server_state,
-           protocol_version: meta.protocol_version,
-           client_info: meta.client_info,
-           client_capabilities: meta.client_capabilities,
-           min_log_level: config.min_log_level,
-           idle_timeout: config.session_idle_timeout,
-           max_lifetime: config.session_max_lifetime
-         ) do
+    session_opts =
+      [
+        server: config.server,
+        server_state: server_state,
+        protocol_version: meta.protocol_version,
+        client_info: meta.client_info,
+        client_capabilities: meta.client_capabilities,
+        min_log_level: config.min_log_level,
+        idle_timeout: config.session_idle_timeout,
+        max_lifetime: config.session_max_lifetime
+      ]
+      |> maybe_put_buffer_limit(config.sse_buffer_limit)
+
+    case Session.start(session_opts) do
       {:ok, session_id, pid} ->
         # Hand the reserved slot to the session. If the limiter no longer knows the
         # reservation (e.g. it restarted since reserve/1), the session would be uncounted,
@@ -544,6 +551,11 @@ defmodule Urchin.Transport.StreamableHTTP do
         raise ArgumentError, ":tool_errors must be :json_rpc or :result, got: #{inspect(other)}"
     end
   end
+
+  # When nil, omit the key so the Session keeps its own default (@default_buffer_limit).
+  # Passing buffer_limit: nil would defeat Keyword.get's default and crash push_general.
+  defp maybe_put_buffer_limit(opts, nil), do: opts
+  defp maybe_put_buffer_limit(opts, limit), do: Keyword.put(opts, :buffer_limit, limit)
 
   ## Origin / Accept
 

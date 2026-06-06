@@ -363,4 +363,19 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert is_list(Jason.decode!(after_conn.resp_body)["result"]["tools"])
     end
   end
+
+  describe "sse_buffer_limit option" do
+    test "validates and defaults" do
+      assert %{sse_buffer_limit: nil} = StreamableHTTP.init(server: EchoServer)
+      assert %{sse_buffer_limit: 5} = StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 5)
+
+      assert_raise ArgumentError, fn ->
+        StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 0)
+      end
+
+      assert_raise ArgumentError, fn ->
+        StreamableHTTP.init(server: EchoServer, sse_buffer_limit: -1)
+      end
+    end
+  end
 end

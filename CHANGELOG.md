@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   protocol error returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error.
 - `validate_tool_names: true` option for `use Urchin.Server` enforcing, at compile time, that
   every literal tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`).
+- `:sse_buffer_limit` transport option (default `100`) forwarding the per-session GET-stream
+  replay buffer size to the session; previously only configurable on `Urchin.Session`
+  directly.
 
 ### Changed
 

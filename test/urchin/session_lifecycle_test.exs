@@ -66,4 +66,15 @@ defmodule Urchin.SessionLifecycleTest do
     Session.terminate(pid)
     assert_receive :mcp_close, 1_000
   end
+
+  test "buffer_limit caps the general-stream replay buffer" do
+    {:ok, _id, pid} = start(buffer_limit: 1)
+    Session.notify(pid, "notifications/message", %{"n" => 1})
+    Session.notify(pid, "notifications/message", %{"n" => 2})
+
+    {:ok, "g0", replay} = Session.register_general_stream(pid, self(), {"g0", 0})
+    assert length(replay) == 1
+
+    Session.terminate(pid)
+  end
 end
