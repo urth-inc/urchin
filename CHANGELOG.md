@@ -56,8 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Duplicate tool names within a server are now rejected at compile time (a silently shadowed
-  duplicate was previously accepted, with the last declaration winning).
+- Duplicate tool names declared via the DSL are now rejected at compile time (a silently
+  shadowed duplicate was previously accepted, with the last declaration winning).
 - README no longer claims unqualified "resumable SSE streams"; resumption is scoped to the
   GET stream, matching the implementation.
 

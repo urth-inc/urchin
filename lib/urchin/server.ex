@@ -34,7 +34,7 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
-  Duplicate tool names within a server are rejected at compile time. Pass
+  Duplicate tool names declared via the DSL are rejected at compile time. Pass
   `validate_tool_names: true` to `use Urchin.Server` to additionally enforce that every literal
   tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`); a non-matching name raises
   `ArgumentError`.
