@@ -34,7 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
 - `:enforce_initialized` transport option (default `false`) rejecting operation requests
   received before the client sends `notifications/initialized` with `invalid_request`;
-  only `ping` is allowed. The default may be flipped to `true` in a future minor release.
+  only `ping` is allowed. The default may be flipped to `true` in a future minor release; set
+  `true` for strict MCP lifecycle compliance.
 - `:tool_errors` transport option (`:result` default | `:json_rpc`). By default a `tools/call`
   handler's `{:error, message}` (string) is now returned as a `CallToolResult` with
   `isError: true` so the model can self-correct (the spec-compliant behavior); set `:json_rpc`
@@ -42,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Note: this changes the prior behavior
   where such a handler error became a JSON-RPC error.
 - `validate_tool_names: true` option for `use Urchin.Server` enforcing, at compile time, that
-  every literal tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`).
+  every literal tool name matches `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` (default `false`).
 - `:sse_buffer_limit` transport option (default `nil`, preserving the session's internal
   default of `100`) forwarding the per-session GET-stream replay buffer size to the session;
   previously only configurable on `Urchin.Session` directly.

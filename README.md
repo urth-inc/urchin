@@ -370,7 +370,8 @@ The transport implements: a single endpoint serving POST/GET/DELETE, the
 JSON-vs-SSE response decision, `202 Accepted` for notifications and responses,
 `Origin` validation, `MCP-Session-Id` management, the `MCP-Protocol-Version` header,
 SSE priming events, per-stream event ids, and `Last-Event-ID` resumption of the GET
-stream.
+stream. Urchin currently replays the GET general stream only; POST request streams are
+not replayed (the spec permits, but does not require, replaying either).
 
 ### Not included
 
