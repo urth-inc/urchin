@@ -85,4 +85,14 @@ defmodule Urchin.SessionLifecycleTest do
     assert Session.snapshot(pid).initialized
     Session.terminate(pid)
   end
+
+  test "buffer_limit: nil falls back to the default replay buffer" do
+    {:ok, _id, pid} = start(buffer_limit: nil)
+    Session.notify(pid, "notifications/message", %{"n" => 1})
+
+    {:ok, "g0", replay} = Session.register_general_stream(pid, self(), {"g0", 0})
+    assert length(replay) == 1
+
+    Session.terminate(pid)
+  end
 end

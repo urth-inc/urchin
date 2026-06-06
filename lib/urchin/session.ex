@@ -166,7 +166,7 @@ defmodule Urchin.Session do
       general_stream_id: "g0",
       general_seq: 0,
       general_buffer: [],
-      buffer_limit: Keyword.get(opts, :buffer_limit, @default_buffer_limit),
+      buffer_limit: Keyword.get(opts, :buffer_limit) || @default_buffer_limit,
       inflight: %{},
       cancelled: MapSet.new(),
       outbound: %{},
