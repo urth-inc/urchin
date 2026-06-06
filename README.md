@@ -13,7 +13,7 @@ specification over the **Streamable HTTP** transport.
 - Mount as a `Plug` into Phoenix/Plug pipelines, or run standalone with Bandit.
 - Tools, resources, resource templates, prompts, completion and logging.
 - Server-initiated requests over SSE: sampling, elicitation and roots.
-- Progress notifications, cancellation, pagination and resumable SSE streams.
+- Progress notifications, cancellation, pagination and a resumable GET SSE stream.
 - Optional OAuth 2.1 authorization: RFC 9728 discovery and pluggable token validation.
 
 > This library implements the server side only. The stdio transport is intentionally
