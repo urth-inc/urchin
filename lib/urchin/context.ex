@@ -37,7 +37,7 @@ defmodule Urchin.Context do
     validate_arguments: false,
     initialized: false,
     enforce_initialized: false,
-    tool_errors: :json_rpc,
+    tool_errors: :result,
     cancelled_ref: nil
   ]
 

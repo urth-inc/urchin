@@ -37,10 +37,10 @@ defmodule Urchin.Transport.StreamableHTTP do
       `notifications/initialized` with `invalid_request`; only `ping` is allowed (default
       `false`). The default may be flipped to `true` in a future minor release.
     * `:tool_errors` - how a `tools/call` handler's `{:error, binary}` is surfaced:
-      `:json_rpc` (default) returns it as a JSON-RPC internal error; `:result` returns it as a
-      `CallToolResult` with `isError: true` so the model can self-correct. A protocol error
-      returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Other methods are
-      unaffected.
+      `:result` (default) returns it as a `CallToolResult` with `isError: true` so the model can
+      self-correct (the spec-compliant behavior); `:json_rpc` returns it as a JSON-RPC internal
+      error. A protocol error returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error.
+      Other methods are unaffected.
     * `:sse_buffer_limit` - the maximum number of recent general-stream (GET SSE) events each
       session keeps for resumption replay. Defaults to `nil`, which preserves the session's
       internal default of `100`. A positive integer or `nil`.
@@ -555,7 +555,7 @@ defmodule Urchin.Transport.StreamableHTTP do
   # keeps the current behavior; :result turns it into an isError tool result. Fail fast on a
   # bad value at startup, matching how the session-limit options are validated.
   defp tool_errors_opt!(opts) do
-    case Keyword.get(opts, :tool_errors, :json_rpc) do
+    case Keyword.get(opts, :tool_errors, :result) do
       value when value in [:json_rpc, :result] ->
         value
 

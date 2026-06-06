@@ -35,10 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `:enforce_initialized` transport option (default `false`) rejecting operation requests
   received before the client sends `notifications/initialized` with `invalid_request`;
   only `ping` is allowed. The default may be flipped to `true` in a future minor release.
-- `:tool_errors` transport option (`:json_rpc` default | `:result`). With `:result`, a
-  `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
-  `isError: true` so the model can self-correct, instead of a JSON-RPC internal error. A
-  protocol error returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error.
+- `:tool_errors` transport option (`:result` default | `:json_rpc`). By default a `tools/call`
+  handler's `{:error, message}` (string) is now returned as a `CallToolResult` with
+  `isError: true` so the model can self-correct (the spec-compliant behavior); set `:json_rpc`
+  for the legacy behavior of returning a JSON-RPC internal error. A protocol error returned as
+  `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Note: this changes the prior behavior
+  where such a handler error became a JSON-RPC error.
 - `validate_tool_names: true` option for `use Urchin.Server` enforcing, at compile time, that
   every literal tool name matches `~r/^[a-zA-Z0-9_.-]{1,128}$/` (default `false`).
 - `:sse_buffer_limit` transport option (default `nil`, preserving the session's internal
