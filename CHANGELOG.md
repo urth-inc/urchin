@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `application/json`.
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
 
+### Changed
+
+- `logging/setLevel` is now a library builtin: advertising the `logging` capability (via
+  `use Urchin.Server, logging: true`) makes `logging/setLevel` succeed and apply the level to
+  the session even when the server does not export `set_log_level/2`. An exported
+  `set_log_level/2` is still invoked as a hook.
+
 ## [0.2.0] - 2026-06-05
 
 ### Added

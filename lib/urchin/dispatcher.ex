@@ -10,7 +10,7 @@ defmodule Urchin.Dispatcher do
 
   require Logger
 
-  alias Urchin.{Context, Error, Protocol, Result}
+  alias Urchin.{Context, Error, Protocol, Result, Session}
 
   @doc """
   Handles an `initialize` request.
@@ -169,10 +169,17 @@ defmodule Urchin.Dispatcher do
   end
 
   defp do_handle(server, "logging/setLevel", params, ctx) do
-    with_callback(server, :set_log_level, 2, fn ->
-      level = require_string(params, "level")
+    level = require_string(params, "level")
+
+    # logging/setLevel is a library builtin: apply the level to the session first, then call
+    # the server's set_log_level/2 as an optional hook when it is defined.
+    set_session_log_level(ctx, level)
+
+    if exported?(server, :set_log_level, 2) do
       empty_result(server.set_log_level(level, ctx), ctx)
-    end)
+    else
+      {:ok, %{}}
+    end
   end
 
   defp do_handle(_server, method, _params, _ctx) do
@@ -263,6 +270,14 @@ defmodule Urchin.Dispatcher do
       {:error, Error.method_not_found("Server does not support #{fun}")}
     end
   end
+
+  # Apply the client-requested log level to the session when one exists; a nil session
+  # (e.g. a handler invoked in a unit test) is a no-op.
+  defp set_session_log_level(%Context{session: session}, level) when is_pid(session) do
+    Session.set_log_level(session, level)
+  end
+
+  defp set_session_log_level(_ctx, _level), do: :ok
 
   defp capabilities(server) do
     if exported?(server, :capabilities, 0), do: server.capabilities(), else: %{}

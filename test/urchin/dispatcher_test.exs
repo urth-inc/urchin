@@ -1,8 +1,25 @@
+defmodule Urchin.DispatcherTest.LoggingServer do
+  @moduledoc false
+  # Exports set_log_level/2 so the builtin-plus-hook path can be exercised.
+  use Urchin.Server, name: "logging", version: "1.0.0", logging: true
+
+  @impl true
+  def set_log_level(level, ctx) do
+    case ctx.assigns do
+      %{test_pid: pid} -> send(pid, {:set_log_level_called, level})
+      _ -> :ok
+    end
+
+    :ok
+  end
+end
+
 defmodule Urchin.DispatcherTest do
   use ExUnit.Case, async: true
 
-  alias Urchin.{Context, Dispatcher}
+  alias Urchin.{Context, Dispatcher, Session}
   alias Urchin.Test.EchoServer
+  alias Urchin.DispatcherTest.LoggingServer
 
   defp ctx, do: %Context{}
 
@@ -261,6 +278,54 @@ defmodule Urchin.DispatcherTest do
     test "positional (array) params are rejected with -32602" do
       assert {:error, error} = Dispatcher.handle_request(EchoServer, "tools/list", [1, 2], ctx())
       assert error.code == -32_602
+    end
+  end
+
+  describe "logging/setLevel" do
+    test "succeeds as a builtin without a server callback" do
+      assert {:ok, %{}} =
+               Dispatcher.handle_request(
+                 EchoServer,
+                 "logging/setLevel",
+                 %{"level" => "warning"},
+                 ctx()
+               )
+    end
+
+    test "rejects a missing level param" do
+      assert {:error, error} =
+               Dispatcher.handle_request(EchoServer, "logging/setLevel", %{}, ctx())
+
+      assert error.code == -32_602
+    end
+
+    test "reflects the requested level on the session" do
+      {:ok, _id, pid} = Session.start(server: EchoServer, protocol_version: "2025-11-25")
+      on_exit(fn -> Session.terminate(pid) end)
+
+      assert {:ok, %{}} =
+               Dispatcher.handle_request(
+                 EchoServer,
+                 "logging/setLevel",
+                 %{"level" => "error"},
+                 %Context{session: pid}
+               )
+
+      assert Session.snapshot(pid).min_log_level == "error"
+    end
+
+    test "invokes an exported set_log_level/2 hook" do
+      ctx = %Context{assigns: %{test_pid: self()}}
+
+      assert {:ok, %{}} =
+               Dispatcher.handle_request(
+                 LoggingServer,
+                 "logging/setLevel",
+                 %{"level" => "info"},
+                 ctx
+               )
+
+      assert_received {:set_log_level_called, "info"}
     end
   end
 end
