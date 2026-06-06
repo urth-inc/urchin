@@ -43,7 +43,8 @@ defmodule Urchin.Transport.StreamableHTTP do
       returned as `{:error, %Urchin.Error{}}` is always a JSON-RPC error. Other methods are
       unaffected.
     * `:sse_buffer_limit` - the maximum number of recent general-stream (GET SSE) events each
-      session keeps for resumption replay (default `100`). A positive integer or `nil`.
+      session keeps for resumption replay. Defaults to `nil`, which preserves the session's
+      internal default of `100`. A positive integer or `nil`.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
