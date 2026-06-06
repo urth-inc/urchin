@@ -233,8 +233,10 @@ defmodule Urchin.Transport.StreamableHTTP do
          session_pid,
          {:notification, "notifications/initialized", _params}
        ) do
-    :ok = Session.mark_initialized(session_pid)
-    send_resp(conn, 202, "")
+    case mark_initialized_safe(session_pid) do
+      :ok -> send_resp(conn, 202, "")
+      {:error, status, error} -> send_error(conn, status, nil, error)
+    end
   end
 
   defp route_session_message(conn, _config, session_pid, {:notification, _m, _p} = msg) do
@@ -484,6 +486,17 @@ defmodule Urchin.Transport.StreamableHTTP do
           {:error, 400, Error.invalid_request("Session required")}
         end
     end
+  end
+
+  # notifications/initialized commits synchronously via a GenServer.call so the next request
+  # observes initialized: true. lookup_session/2 only proves the session was alive a moment ago, so
+  # a session that terminates in between would make the call exit and crash the Plug process; catch
+  # that and report a clean "Session not found", mirroring lookup_session/2 (and set_log_level).
+  defp mark_initialized_safe(session_pid) do
+    Session.mark_initialized(session_pid)
+    :ok
+  catch
+    :exit, _ -> {:error, 404, Error.invalid_request("Session not found")}
   end
 
   defp check_protocol_version(_conn, %{validate_protocol_version: false}), do: :ok
