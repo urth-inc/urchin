@@ -235,9 +235,9 @@ defmodule Urchin.Dispatcher do
 
   defp do_handle(server, "completion/complete", params, ctx) do
     with_callback(server, :complete, 4, fn ->
-      ref = require_map(params, "ref")
-      argument = require_map(params, "argument")
-      completion_context = Map.get(params, "context", %{})
+      ref = require_completion_ref(params)
+      argument = require_completion_argument(params)
+      completion_context = require_completion_context(params)
 
       case server.complete(ref, argument, completion_context, ctx) do
         {:ok, completion} -> {:ok, %{completion: completion(completion)}}
@@ -340,9 +340,17 @@ defmodule Urchin.Dispatcher do
     )
   end
 
-  # The completion spec caps values at 100 per response; when a handler returns more, the list is
-  # truncated to the top 100 (already ranked by relevance) and hasMore is necessarily true.
-  defp build_completion(values, total, has_more) when is_list(values) do
+  defp completion(_other) do
+    raise Error.internal_error("completion result must be a map or a list of values")
+  end
+
+  # CompleteResult.completion is `{ values: string[], total?: number, hasMore?: boolean }`. A
+  # malformed result is a server bug, so it surfaces as an internal error rather than shipping a
+  # non-conforming response. The spec also caps values at 100 per response; when a handler returns
+  # more, the list is truncated to the top 100 (already ranked) and hasMore is necessarily true.
+  defp build_completion(values, total, has_more) do
+    validate_completion_result!(values, total, has_more)
+
     {capped, has_more} =
       if length(values) > @max_completion_values do
         {Enum.take(values, @max_completion_values), true}
@@ -353,6 +361,22 @@ defmodule Urchin.Dispatcher do
     %{values: capped}
     |> maybe_put(:total, total)
     |> maybe_put(:hasMore, has_more)
+  end
+
+  defp validate_completion_result!(values, total, has_more) do
+    cond do
+      not (is_list(values) and Enum.all?(values, &is_binary/1)) ->
+        raise Error.internal_error("completion values must be a list of strings")
+
+      not (is_nil(total) or is_number(total)) ->
+        raise Error.internal_error("completion total must be a number")
+
+      not (is_nil(has_more) or is_boolean(has_more)) ->
+        raise Error.internal_error("completion hasMore must be a boolean")
+
+      true ->
+        :ok
+    end
   end
 
   # Reads a value that may be keyed by atom or string, preserving false/0 values.
@@ -476,6 +500,58 @@ defmodule Urchin.Dispatcher do
       value when is_map(value) -> value
       _ -> raise Error.invalid_params(~s(Missing or invalid object param "#{key}"))
     end
+  end
+
+  # CompleteRequestParams.ref is a discriminated union: ref/prompt carries a string name,
+  # ref/resource carries a string uri. Anything else is a malformed request.
+  defp require_completion_ref(params) do
+    ref = require_map(params, "ref")
+
+    case Map.get(ref, "type") do
+      "ref/prompt" -> _ = require_string(ref, "name")
+      "ref/resource" -> _ = require_string(ref, "uri")
+      other -> raise Error.invalid_params("completion ref.type is invalid: #{inspect(other)}")
+    end
+
+    ref
+  end
+
+  # CompleteRequestParams.argument is `{ name: string, value: string }`, both required.
+  defp require_completion_argument(params) do
+    argument = require_map(params, "argument")
+    _ = require_string(argument, "name")
+    _ = require_string(argument, "value")
+    argument
+  end
+
+  # CompleteRequestParams.context is optional; its `arguments` map, when present, maps argument
+  # names to string values.
+  defp require_completion_context(params) do
+    case Map.get(params, "context") do
+      nil ->
+        %{}
+
+      %{} = context ->
+        validate_context_arguments!(Map.get(context, "arguments"))
+        context
+
+      _ ->
+        raise Error.invalid_params("completion context must be an object")
+    end
+  end
+
+  defp validate_context_arguments!(nil), do: :ok
+
+  defp validate_context_arguments!(arguments) when is_map(arguments) do
+    if Enum.all?(arguments, fn {_k, v} -> is_binary(v) end) do
+      :ok
+    else
+      raise Error.invalid_params("completion context.arguments values must be strings")
+    end
+  end
+
+  defp validate_context_arguments!(_other) do
+    raise Error.invalid_params("completion context.arguments must be an object")
   end
 
   # Rescued exceptions are always logged in full but, by default, are not surfaced to the

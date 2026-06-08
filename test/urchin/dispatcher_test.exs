@@ -52,13 +52,24 @@ defmodule Urchin.DispatcherTest.BigCompletionServer do
   end
 end
 
+defmodule Urchin.DispatcherTest.BadCompletionServer do
+  @moduledoc false
+  # Returns a non-conforming completion result (values are not strings).
+  use Urchin.Server, name: "bad-completion", version: "1.0.0", completions: true
+
+  @impl true
+  def complete(_ref, _argument, _context, _ctx) do
+    {:ok, %{values: [1, 2, 3]}}
+  end
+end
+
 defmodule Urchin.DispatcherTest do
   use ExUnit.Case, async: true
 
   alias Urchin.{Context, Dispatcher, Session}
   alias Urchin.Test.EchoServer
   alias Urchin.DispatcherTest.{LoggingServer, NoLoggingServer, FailingLoggingServer}
-  alias Urchin.DispatcherTest.{BadInfoServer, BigCompletionServer}
+  alias Urchin.DispatcherTest.{BadInfoServer, BigCompletionServer, BadCompletionServer}
 
   # The default context represents an initialized session; the lifecycle gate is exercised
   # explicitly in the "initialized gating" describe with initialized: false.
@@ -369,6 +380,60 @@ defmodule Urchin.DispatcherTest do
 
       assert length(completion.values) == 100
       assert completion.hasMore == true
+    end
+
+    test "rejects an argument without a string name and value" do
+      params = %{
+        "ref" => %{"type" => "ref/prompt", "name" => "greet"},
+        "argument" => %{"name" => "name"}
+      }
+
+      assert {:error, error} =
+               Dispatcher.handle_request(EchoServer, "completion/complete", params, ctx())
+
+      assert error.code == -32_602
+    end
+
+    test "rejects an unknown ref type" do
+      params = %{
+        "ref" => %{"type" => "ref/bogus"},
+        "argument" => %{"name" => "name", "value" => "Sa"}
+      }
+
+      assert {:error, error} =
+               Dispatcher.handle_request(EchoServer, "completion/complete", params, ctx())
+
+      assert error.code == -32_602
+    end
+
+    test "rejects non-string context.arguments values" do
+      params = %{
+        "ref" => %{"type" => "ref/prompt", "name" => "greet"},
+        "argument" => %{"name" => "name", "value" => "Sa"},
+        "context" => %{"arguments" => %{"prior" => 1}}
+      }
+
+      assert {:error, error} =
+               Dispatcher.handle_request(EchoServer, "completion/complete", params, ctx())
+
+      assert error.code == -32_602
+    end
+
+    test "a non-conforming completion result is an internal error" do
+      params = %{
+        "ref" => %{"type" => "ref/prompt", "name" => "x"},
+        "argument" => %{"name" => "n", "value" => "v"}
+      }
+
+      assert {:error, error} =
+               Dispatcher.handle_request(
+                 BadCompletionServer,
+                 "completion/complete",
+                 params,
+                 ctx()
+               )
+
+      assert error.code == -32_603
     end
 
     test "ping" do
