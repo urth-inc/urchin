@@ -413,14 +413,14 @@ defmodule Urchin.DispatcherTest do
                  EchoServer,
                  "logging/setLevel",
                  %{"level" => "error"},
-                 %Context{session: pid}
+                 %Context{session: pid, initialized: true}
                )
 
       assert Session.snapshot(pid).min_log_level == "error"
     end
 
     test "invokes an exported set_log_level/2 hook" do
-      ctx = %Context{assigns: %{test_pid: self()}}
+      ctx = %Context{assigns: %{test_pid: self()}, initialized: true}
 
       assert {:ok, %{}} =
                Dispatcher.handle_request(
@@ -442,7 +442,7 @@ defmodule Urchin.DispatcherTest do
                  EchoServer,
                  "logging/setLevel",
                  %{"level" => "verbose"},
-                 %Context{session: pid}
+                 %Context{session: pid, initialized: true}
                )
 
       assert error.code == -32_602
@@ -473,7 +473,7 @@ defmodule Urchin.DispatcherTest do
                  FailingLoggingServer,
                  "logging/setLevel",
                  %{"level" => "warning"},
-                 %Context{session: pid}
+                 %Context{session: pid, initialized: true}
                )
 
       assert Session.snapshot(pid).min_log_level == before
