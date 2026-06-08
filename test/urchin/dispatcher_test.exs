@@ -492,16 +492,20 @@ defmodule Urchin.DispatcherTest do
       assert {:ok, %{}} = Dispatcher.handle_request(EchoServer, "ping", %{}, ctx)
     end
 
-    test "allows logging/setLevel before initialized" do
+    test "rejects logging/setLevel before initialized (only ping is exempt)" do
+      # The lifecycle's pre-init exception for logging is the server's own requests, not the
+      # client's logging/setLevel, so it is gated like any other operation request.
       ctx = %Context{initialized: false}
 
-      assert {:ok, %{}} =
+      assert {:error, error} =
                Dispatcher.handle_request(
                  EchoServer,
                  "logging/setLevel",
                  %{"level" => "info"},
                  ctx
                )
+
+      assert error.code == -32_600
     end
 
     test "allows operation requests once initialized" do

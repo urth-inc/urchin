@@ -113,7 +113,7 @@ defmodule Urchin.Dispatcher do
 
   def handle_request(server, method, params, ctx) do
     # Lifecycle gate: until notifications/initialized has been received, reject operation requests
-    # other than ping and logging/setLevel with invalid_request.
+    # other than ping with invalid_request.
     with :ok <- check_initialized(method, ctx) do
       do_handle(server, method, params, ctx)
     end
@@ -145,11 +145,11 @@ defmodule Urchin.Dispatcher do
     end
   end
 
-  # Only ping and logging/setLevel are allowed before the client sends
-  # notifications/initialized; per the MCP lifecycle a client should not send other requests
-  # until initialization completes.
+  # Only ping is allowed before the client sends notifications/initialized; per the MCP lifecycle
+  # the client should not send requests other than pings until initialization completes. The
+  # pings-and-logging exception in the spec is for the server's own requests/notifications, not
+  # the client's logging/setLevel.
   defp pre_init_allowed?("ping"), do: true
-  defp pre_init_allowed?("logging/setLevel"), do: true
   defp pre_init_allowed?(_method), do: false
 
   # ping is always available regardless of declared capabilities.
