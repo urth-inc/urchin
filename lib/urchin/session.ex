@@ -108,8 +108,9 @@ defmodule Urchin.Session do
   @doc """
   Handles a client-originated notification or response delivered over POST.
 
-  Notifications (`notifications/cancelled`, `notifications/initialized`, ...) update
-  session state; responses are correlated to a pending outbound request.
+  Notifications (`notifications/cancelled`, ...) update session state; responses are correlated
+  to a pending outbound request. `notifications/initialized` is committed synchronously via
+  `mark_initialized/1`, not through this path.
   """
   @spec handle_client_message(pid(), Urchin.JSONRPC.decoded()) :: :ok
   def handle_client_message(pid, message), do: GenServer.cast(pid, {:client_message, message})
@@ -343,9 +344,8 @@ defmodule Urchin.Session do
 
   ## Internal: client message handling
 
-  defp handle_client({:notification, "notifications/initialized", _params}, state) do
-    %{state | initialized: true}
-  end
+  # notifications/initialized is committed synchronously via mark_initialized/1 (the transport
+  # routes it there so the next request observes initialized: true), so it is not handled here.
 
   defp handle_client({:notification, "notifications/cancelled", params}, state) do
     request_id = Map.get(params, "requestId")
