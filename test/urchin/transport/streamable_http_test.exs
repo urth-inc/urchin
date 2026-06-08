@@ -278,6 +278,19 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert wait_for_termination(session_id) == :ok
     end
 
+    test "DELETE rejects an unsupported MCP-Protocol-Version" do
+      {session_id, _} = init_session()
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+        |> StreamableHTTP.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"]["code"] == -32_600
+    end
+
     test "DELETE is 405 when disabled" do
       opts = StreamableHTTP.init(server: EchoServer, allow_delete: false)
       {session_id, _} = init_session()
