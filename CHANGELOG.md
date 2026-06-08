@@ -52,14 +52,17 @@ breaking relative to `0.2.0`.
   `call_tool/3` by hand validate their own arguments. `Urchin.Schema` implements the supported
   (minimal) JSON Schema subset.
 - Operation requests received before the client sends `notifications/initialized` are rejected
-  with `invalid_request`; only `ping` and `logging/setLevel` are allowed before initialization.
-  Clients must complete the lifecycle handshake before issuing other requests.
+  with `invalid_request`; only `ping` is allowed before initialization (the lifecycle's
+  pings-and-logging exception is for the server's own requests, not the client's
+  `logging/setLevel`). Clients must complete the lifecycle handshake before issuing other
+  requests.
 - A `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
   `isError: true` so the model can self-correct. A protocol error returned as
   `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
   became a JSON-RPC internal error.)
-- Duplicate tool names within a server are rejected at compile time (a silently shadowed
-  duplicate was previously accepted, with the last declaration winning). Urchin enforces no
+- Duplicate literal tool names within a server are rejected at compile time (a silently shadowed
+  duplicate was previously accepted, with the last declaration winning); non-literal names (a
+  variable or expression) cannot be compared statically and are not checked. Urchin enforces no
   tool-name pattern (the MCP schema imposes none); servers should still follow the MCP naming
   recommendations.
 - `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`

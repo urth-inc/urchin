@@ -40,8 +40,8 @@ defmodule Urchin.Transport.StreamableHTTP do
   The transport enforces the spec by default and these behaviors are not configurable: it
   validates a DSL tool's `tools/call` arguments against its input schema (a hand-written
   `call_tool/3` validates its own arguments), rejects operation requests received before
-  `notifications/initialized` (only `ping` and `logging/setLevel` are allowed pre-init), and
-  surfaces a tool handler's `{:error, binary}` as an `isError` `CallToolResult`.
+  `notifications/initialized` (only `ping` is allowed pre-init), and surfaces a tool handler's
+  `{:error, binary}` as an `isError` `CallToolResult`.
 
   The plug reads the raw request body itself, so mount it before any JSON body parser.
   """

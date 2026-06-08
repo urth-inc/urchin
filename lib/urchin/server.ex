@@ -34,9 +34,10 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
-  Duplicate tool names declared via the DSL are rejected at compile time. Urchin enforces no
-  tool-name pattern (the MCP schema imposes none); servers should still follow the MCP naming
-  recommendations (a conservative charset, a length bound, no whitespace).
+  Duplicate literal tool names declared via the DSL are rejected at compile time (non-literal
+  names cannot be compared statically and are not checked). Urchin enforces no tool-name pattern
+  (the MCP schema imposes none); servers should still follow the MCP naming recommendations (a
+  conservative charset, a length bound, no whitespace).
 
   ## Behaviour
 

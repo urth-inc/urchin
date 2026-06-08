@@ -359,8 +359,8 @@ Some MCP behaviors are enforced unconditionally and have no option: a DSL tool's
 arguments are validated against its `input_schema` (a mismatch is an `isError` `CallToolResult`; a
 tool with no schema accepts no properties — servers that implement `call_tool/3` by hand validate
 their own arguments); operation requests before `notifications/initialized` are rejected (`ping`
-and `logging/setLevel` excepted); a `tools/call` handler's `{:error, binary}` is returned as an
-`isError` `CallToolResult`; duplicate tool names are rejected at compile time; and
+excepted); a `tools/call` handler's `{:error, binary}` is returned as an `isError`
+`CallToolResult`; duplicate literal tool names are rejected at compile time; and
 `completion/complete` results are capped at 100 values.
 
 ## Specification coverage
