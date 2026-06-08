@@ -34,8 +34,8 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
-  Duplicate tool names declared via the DSL are rejected at compile time, and every literal tool
-  name must match `~r/\A[a-zA-Z0-9_.-]{1,128}\z/`; a non-matching name raises `ArgumentError`.
+  Duplicate tool names declared via the DSL are rejected at compile time. No tool-name pattern is
+  enforced, matching the MCP schema, which imposes none.
 
   ## Behaviour
 
@@ -58,11 +58,6 @@ defmodule Urchin.Server do
   """
 
   alias Urchin.{Context, Error}
-
-  # Constrained tool-name charset. The MCP schema imposes no pattern, but this is the
-  # de-facto convention shared by common tool-calling SDKs; dots and dashes are permitted
-  # for namespacing. Enforced for every literal tool name at compile time.
-  @tool_name_pattern ~r/\A[a-zA-Z0-9_.-]{1,128}\z/
 
   @type cursor :: String.t() | nil
   @type list_result(item) ::
@@ -258,25 +253,14 @@ defmodule Urchin.Server do
   end
 
   # Duplicate tool names within a server are rejected at compile time (a silently shadowed
-  # duplicate is a bug), and every literal name must match @tool_name_pattern. Non-literal names
-  # (a variable or call) cannot be compared statically and are skipped, mirroring handler_name/2.
+  # duplicate is a bug). The MCP schema imposes no tool-name pattern, so none is enforced.
+  # Non-literal names (a variable or call) cannot be compared statically and are skipped,
+  # mirroring handler_name/2.
   defp validate_tool_names!(tool_dispatch) do
-    names =
-      tool_dispatch
-      |> Enum.map(fn {name, _fname, _scopes} -> name end)
-      |> Enum.filter(&is_binary/1)
-
-    validate_unique_tool_names!(names)
-    Enum.each(names, &validate_tool_name_pattern!/1)
-
-    :ok
-  end
-
-  defp validate_tool_name_pattern!(name) do
-    if not Regex.match?(@tool_name_pattern, name) do
-      raise ArgumentError,
-            "tool name #{inspect(name)} is invalid; must match #{inspect(@tool_name_pattern.source)}"
-    end
+    tool_dispatch
+    |> Enum.map(fn {name, _fname, _scopes} -> name end)
+    |> Enum.filter(&is_binary/1)
+    |> validate_unique_tool_names!()
   end
 
   defp validate_unique_tool_names!(names) do

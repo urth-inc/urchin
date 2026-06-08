@@ -58,10 +58,9 @@ breaking relative to `0.2.0`.
   `isError: true` so the model can self-correct. A protocol error returned as
   `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
   became a JSON-RPC internal error.)
-- Literal tool names are validated at compile time against `~r/\A[a-zA-Z0-9_.-]{1,128}\z/` — a
-  de-facto convention shared by common tool-calling SDKs that Urchin now enforces, though the
-  MCP schema itself imposes no pattern — and duplicate names within a server are rejected (a
-  silently shadowed duplicate was previously accepted, with the last declaration winning).
+- Duplicate tool names within a server are rejected at compile time (a silently shadowed
+  duplicate was previously accepted, with the last declaration winning). No tool-name pattern is
+  enforced, matching the MCP schema, which imposes none.
 - `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`
   (with a string `name` and `version`); a missing or mistyped field is an `invalid_params`
   error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a

@@ -34,10 +34,10 @@ defmodule Urchin.ServerTest do
   end
 
   describe "tool name validation" do
-    test "rejects an invalid tool name at compile time" do
+    test "does not enforce a tool-name pattern (the MCP schema imposes none)" do
       source = """
-      defmodule Urchin.ServerTest.BadName do
-        use Urchin.Server, name: "bad", version: "1.0.0"
+      defmodule Urchin.ServerTest.UnusualName do
+        use Urchin.Server, name: "unusual", version: "1.0.0"
 
         tool "bad name!" do
           {:ok, [Urchin.Content.text("ok")]}
@@ -45,25 +45,7 @@ defmodule Urchin.ServerTest do
       end
       """
 
-      assert_raise ArgumentError, ~r/tool name .* is invalid/, fn ->
-        Code.compile_string(source)
-      end
-    end
-
-    test "rejects a tool name with a trailing newline at compile time" do
-      source = """
-      defmodule Urchin.ServerTest.NewlineName do
-        use Urchin.Server, name: "nl", version: "1.0.0"
-
-        tool "abc\\n" do
-          {:ok, [Urchin.Content.text("ok")]}
-        end
-      end
-      """
-
-      assert_raise ArgumentError, ~r/tool name .* is invalid/, fn ->
-        Code.compile_string(source)
-      end
+      assert [{Urchin.ServerTest.UnusualName, _} | _] = Code.compile_string(source)
     end
 
     test "rejects duplicate tool names at compile time (always on)" do
