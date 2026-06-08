@@ -59,8 +59,9 @@ breaking relative to `0.2.0`.
   `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
   became a JSON-RPC internal error.)
 - Duplicate tool names within a server are rejected at compile time (a silently shadowed
-  duplicate was previously accepted, with the last declaration winning). No tool-name pattern is
-  enforced, matching the MCP schema, which imposes none.
+  duplicate was previously accepted, with the last declaration winning). Urchin enforces no
+  tool-name pattern (the MCP schema imposes none); servers should still follow the MCP naming
+  recommendations.
 - `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`
   (with a string `name` and `version`); a missing or mistyped field is an `invalid_params`
   error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a
