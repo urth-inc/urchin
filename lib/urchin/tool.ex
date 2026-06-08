@@ -43,8 +43,8 @@ defmodule Urchin.Tool do
       name: fetch_name!(attrs),
       title: attrs[:title],
       description: attrs[:description],
-      input_schema: attrs[:input_schema],
-      output_schema: attrs[:output_schema],
+      input_schema: validate_object_schema!(attrs[:input_schema], :input_schema),
+      output_schema: validate_object_schema!(attrs[:output_schema], :output_schema),
       annotations: attrs[:annotations],
       execution: attrs[:execution],
       icons: attrs[:icons],
@@ -54,6 +54,27 @@ defmodule Urchin.Tool do
 
   defp fetch_name!(%{name: name}) when is_binary(name), do: name
   defp fetch_name!(_), do: raise(ArgumentError, "tool requires a string :name")
+
+  # inputSchema and outputSchema are JSON Schema objects whose root `type` is "object" (MCP tools
+  # spec). nil is allowed: input_schema falls back to default_input_schema/0 and output_schema is
+  # optional. A non-object schema would advertise a non-conforming tools/list entry.
+  defp validate_object_schema!(nil, _field), do: nil
+
+  defp validate_object_schema!(schema, field) when is_map(schema) do
+    case schema["type"] || schema[:type] do
+      "object" ->
+        schema
+
+      other ->
+        raise ArgumentError,
+              ~s(tool #{field} must be a JSON Schema object with "type": "object", got type: #{inspect(other)})
+    end
+  end
+
+  defp validate_object_schema!(other, field) do
+    raise ArgumentError,
+          "tool #{field} must be a map (a JSON Schema object), got: #{inspect(other)}"
+  end
 
   @doc """
   The input schema advertised for a tool that declares none: an object accepting no

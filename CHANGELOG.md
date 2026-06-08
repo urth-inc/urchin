@@ -70,8 +70,13 @@ breaking relative to `0.2.0`.
   error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a
   string `name` and `version`.
 - The `MCP-Protocol-Version` header is validated on `DELETE`, matching `POST` and `GET`.
-- `completion/complete` results are capped at 100 values; a handler returning more is truncated
-  to the top 100 (already ranked by relevance) with `hasMore` set.
+- `completion/complete` request params are validated (`ref` as a `ref/prompt`/`ref/resource`
+  union, `argument.name`/`value` as strings, `context.arguments` values as strings) and return
+  `invalid_params` when malformed. Results are capped at 100 values — a handler returning more is
+  truncated to the top 100 (already ranked by relevance) with `hasMore` set — and a
+  non-conforming result shape (non-string `values`, etc.) is an internal error.
+- A tool's `input_schema` and `output_schema` must be JSON Schema objects whose root `type` is
+  `"object"` (per the MCP tools spec); the DSL rejects a non-conforming schema at compile time.
 - `logging/setLevel` is now a library builtin: when the server advertises the `logging`
   capability (via `use Urchin.Server, logging: true`) it succeeds and applies the level to the
   session even without a `set_log_level/2` callback. The level is validated against the MCP log
