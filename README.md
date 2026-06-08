@@ -13,7 +13,7 @@ specification over the **Streamable HTTP** transport.
 - Mount as a `Plug` into Phoenix/Plug pipelines, or run standalone with Bandit.
 - Tools, resources, resource templates, prompts, completion and logging.
 - Server-initiated requests over SSE: sampling, elicitation and roots.
-- Progress notifications, cancellation, pagination and resumable SSE streams.
+- Progress notifications, cancellation, pagination and a resumable GET SSE stream.
 - Optional OAuth 2.1 authorization: RFC 9728 discovery and pluggable token validation.
 
 > This library implements the server side only. The stdio transport is intentionally
@@ -287,7 +287,10 @@ tool "delete", description: "Delete a file" do
   if Urchin.Auth.Claims.has_scope?(Urchin.Context.auth(ctx), "files:write") do
     {:ok, [Urchin.Content.text("deleted")]}
   else
-    {:error, "files:write scope required"}
+    # Return an Urchin.Error so the denial is a JSON-RPC `invalid_request`, matching the
+    # declarative `scopes:` path. A bare string `{:error, "..."}` would instead surface as a
+    # `CallToolResult` with `isError: true`.
+    {:error, Urchin.Error.invalid_request("files:write scope required")}
   end
 end
 ```
@@ -344,13 +347,21 @@ Passed to `Urchin.Transport.StreamableHTTP`, `Urchin.Endpoint` or `Urchin.start_
 | `:request_timeout` | `60_000` | per-request handler timeout (ms) |
 | `:validate_protocol_version` | `true` | validate the `MCP-Protocol-Version` header |
 | `:expose_internal_errors` | `false` | return raised-exception messages to the client (dev only); exceptions are always logged |
-| `:validate_arguments` | `false` | validate `tools/call` arguments against each tool's `input_schema` (see `Urchin.Schema`) |
+| `:sse_buffer_limit` | `nil` | max recent GET-stream (general SSE) events kept per session for resumption replay (`nil` keeps the session default of `100`) |
 | `:max_sessions` | `nil` | reject new sessions with `503` past this many, atomically and before the server's `init/1` runs (`nil` = unlimited) |
 | `:session_idle_timeout` | `nil` | terminate a session after this many ms without client activity; a session serving a request is not reaped (`nil` = never) |
 | `:session_max_lifetime` | `nil` | terminate a session this many ms after creation regardless of activity; set above your longest tool run (`nil` = never) |
 | `:auth` | `nil` | an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens; `nil` disables authorization |
 
 `Urchin.Endpoint`/`Urchin.start_link/2` additionally accept `:port`, `:ip`, `:scheme` and `:path`.
+
+Some MCP behaviors are enforced unconditionally and have no option: a DSL tool's `tools/call`
+arguments are validated against its `input_schema` (a mismatch is an `isError` `CallToolResult`; a
+tool with no schema accepts no properties — servers that implement `call_tool/3` by hand validate
+their own arguments); operation requests before `notifications/initialized` are rejected (`ping`
+excepted); a `tools/call` handler's `{:error, binary}` is returned as an `isError`
+`CallToolResult`; duplicate literal tool names are rejected at compile time; and
+`completion/complete` results are capped at 100 values.
 
 ## Specification coverage
 
@@ -370,7 +381,8 @@ The transport implements: a single endpoint serving POST/GET/DELETE, the
 JSON-vs-SSE response decision, `202 Accepted` for notifications and responses,
 `Origin` validation, `MCP-Session-Id` management, the `MCP-Protocol-Version` header,
 SSE priming events, per-stream event ids, and `Last-Event-ID` resumption of the GET
-stream.
+stream. Urchin currently replays the GET general stream only; POST request streams are
+not replayed (the spec permits, but does not require, replaying either).
 
 ### Not included
 

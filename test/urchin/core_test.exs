@@ -119,8 +119,40 @@ defmodule Urchin.CoreTest do
       assert decoded == %{
                "name" => "t",
                "description" => "d",
-               "inputSchema" => %{"type" => "object"}
+               "inputSchema" => %{"type" => "object", "additionalProperties" => false}
              }
+    end
+  end
+
+  describe "Urchin.Tool schema validation" do
+    test "accepts an object input and output schema" do
+      tool =
+        Tool.new(
+          name: "t",
+          input_schema: %{"type" => "object", "properties" => %{}},
+          output_schema: %{"type" => "object"}
+        )
+
+      assert tool.input_schema["type"] == "object"
+      assert tool.output_schema["type"] == "object"
+    end
+
+    test "rejects an input schema whose root type is not object" do
+      assert_raise ArgumentError, ~r/input_schema.*type.*object/, fn ->
+        Tool.new(name: "t", input_schema: %{"type" => "array"})
+      end
+    end
+
+    test "rejects a non-map input schema" do
+      assert_raise ArgumentError, ~r/input_schema must be a map/, fn ->
+        Tool.new(name: "t", input_schema: "nope")
+      end
+    end
+
+    test "rejects an output schema whose root type is not object" do
+      assert_raise ArgumentError, ~r/output_schema.*type.*object/, fn ->
+        Tool.new(name: "t", output_schema: %{"type" => "string"})
+      end
     end
   end
 

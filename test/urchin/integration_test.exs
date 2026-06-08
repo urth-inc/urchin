@@ -45,6 +45,13 @@ defmodule Urchin.IntegrationTest do
 
     {200, headers, resp} = SSEClient.request(port, "POST", "/mcp", json_headers(), body)
     session_id = Enum.find_value(headers, fn {k, v} -> if k == "mcp-session-id", do: v end)
+
+    # Complete the handshake so subsequent operation requests pass the lifecycle gate.
+    initialized = Jason.encode!(%{jsonrpc: "2.0", method: "notifications/initialized"})
+
+    {202, _h, _b} =
+      SSEClient.request(port, "POST", "/mcp", session_headers(session_id), initialized)
+
     {session_id, Jason.decode!(resp)}
   end
 

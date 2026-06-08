@@ -10,7 +10,7 @@ defmodule Urchin.Dispatcher do
 
   require Logger
 
-  alias Urchin.{Context, Error, Protocol, Result}
+  alias Urchin.{Context, Error, Protocol, Result, Session}
 
   @doc """
   Handles an `initialize` request.
@@ -22,24 +22,25 @@ defmodule Urchin.Dispatcher do
   @spec initialize(module(), map(), Context.t()) ::
           {:ok, map(), map()} | {:error, Error.t()}
   def initialize(server, params, ctx) when is_map(params) do
-    requested = Map.get(params, "protocolVersion", Protocol.latest_version())
-    negotiated = Protocol.negotiate(requested)
+    with :ok <- validate_initialize_params(params) do
+      negotiated = Protocol.negotiate(Map.fetch!(params, "protocolVersion"))
 
-    result =
-      %{
-        protocolVersion: negotiated,
-        capabilities: capabilities(server),
-        serverInfo: server.server_info()
+      result =
+        %{
+          protocolVersion: negotiated,
+          capabilities: capabilities(server),
+          serverInfo: validated_server_info(server)
+        }
+        |> maybe_put(:instructions, instructions(server))
+
+      meta = %{
+        protocol_version: negotiated,
+        client_info: Map.fetch!(params, "clientInfo"),
+        client_capabilities: Map.fetch!(params, "capabilities")
       }
-      |> maybe_put(:instructions, instructions(server))
 
-    meta = %{
-      protocol_version: negotiated,
-      client_info: Map.get(params, "clientInfo"),
-      client_capabilities: Map.get(params, "capabilities", %{})
-    }
-
-    {:ok, result, meta}
+      {:ok, result, meta}
+    end
   rescue
     error in Urchin.Error ->
       {:error, error}
@@ -50,6 +51,53 @@ defmodule Urchin.Dispatcher do
 
   def initialize(_server, _params, _ctx) do
     {:error, Error.invalid_params("initialize params must be an object")}
+  end
+
+  # The client MUST send protocolVersion (string), capabilities (object) and clientInfo (with a
+  # string name and version) in the initialize request; a missing or mistyped field is a protocol
+  # error rather than a silently-defaulted value.
+  defp validate_initialize_params(params) do
+    with :ok <- ensure_string(params, "protocolVersion"),
+         :ok <- ensure_object(params, "capabilities"),
+         :ok <- ensure_object(params, "clientInfo") do
+      validate_client_info(Map.fetch!(params, "clientInfo"))
+    end
+  end
+
+  defp validate_client_info(info) do
+    if is_binary(info[:name] || info["name"]) and is_binary(info[:version] || info["version"]) do
+      :ok
+    else
+      {:error, Error.invalid_params("initialize: clientInfo requires a string name and version")}
+    end
+  end
+
+  defp ensure_string(params, key) do
+    case Map.get(params, key) do
+      value when is_binary(value) -> :ok
+      _ -> {:error, Error.invalid_params(~s(initialize: missing or invalid string "#{key}"))}
+    end
+  end
+
+  defp ensure_object(params, key) do
+    case Map.get(params, key) do
+      value when is_map(value) -> :ok
+      _ -> {:error, Error.invalid_params(~s(initialize: missing or invalid object "#{key}"))}
+    end
+  end
+
+  # serverInfo MUST carry a string name and version. The DSL enforces this at the
+  # __server_info__ boundary, but a hand-written server_info/0 could omit them and produce a
+  # malformed InitializeResult; surface that as an internal error instead of shipping it.
+  defp validated_server_info(server) do
+    info = server.server_info()
+
+    if is_map(info) and is_binary(info[:name] || info["name"]) and
+         is_binary(info[:version] || info["version"]) do
+      info
+    else
+      raise Error.internal_error("serverInfo must include a string name and version")
+    end
   end
 
   @doc """
@@ -64,7 +112,11 @@ defmodule Urchin.Dispatcher do
   end
 
   def handle_request(server, method, params, ctx) do
-    do_handle(server, method, params, ctx)
+    # Lifecycle gate: until notifications/initialized has been received, reject operation requests
+    # other than ping with invalid_request.
+    with :ok <- check_initialized(method, ctx) do
+      do_handle(server, method, params, ctx)
+    end
   rescue
     error in Urchin.Error ->
       {:error, error}
@@ -76,6 +128,29 @@ defmodule Urchin.Dispatcher do
       Logger.error("Urchin handler for #{method} threw: #{inspect(value)}")
       {:error, Error.internal_error(generic_or(ctx, "Handler threw: " <> inspect(value)))}
   end
+
+  # Until the client sends notifications/initialized the session is not initialized; only the
+  # pre-init methods are honoured. `notifications/initialized` is a notification routed straight
+  # into the session, so it never reaches this request-only path.
+  defp check_initialized(_method, %Context{initialized: true}), do: :ok
+
+  defp check_initialized(method, %Context{}) do
+    if pre_init_allowed?(method) do
+      :ok
+    else
+      {:error,
+       Error.invalid_request(
+         "Server not initialized: send notifications/initialized before #{method}"
+       )}
+    end
+  end
+
+  # Only ping is allowed before the client sends notifications/initialized; per the MCP lifecycle
+  # the client should not send requests other than pings until initialization completes. The
+  # pings-and-logging exception in the spec is for the server's own requests/notifications, not
+  # the client's logging/setLevel.
+  defp pre_init_allowed?("ping"), do: true
+  defp pre_init_allowed?(_method), do: false
 
   # ping is always available regardless of declared capabilities.
   defp do_handle(_server, "ping", _params, _ctx), do: {:ok, %{}}
@@ -90,7 +165,10 @@ defmodule Urchin.Dispatcher do
     with_callback(server, :call_tool, 3, fn ->
       name = require_string(params, "name")
       args = Map.get(params, "arguments", %{})
-      call_tool_result(server, name, args, %{ctx | progress_token: progress_token(params)})
+
+      with :ok <- require_arguments_object(args) do
+        call_tool_result(server, name, args, %{ctx | progress_token: progress_token(params)})
+      end
     end)
   end
 
@@ -157,9 +235,9 @@ defmodule Urchin.Dispatcher do
 
   defp do_handle(server, "completion/complete", params, ctx) do
     with_callback(server, :complete, 4, fn ->
-      ref = require_map(params, "ref")
-      argument = require_map(params, "argument")
-      completion_context = Map.get(params, "context", %{})
+      ref = require_completion_ref(params)
+      argument = require_completion_argument(params)
+      completion_context = require_completion_context(params)
 
       case server.complete(ref, argument, completion_context, ctx) do
         {:ok, completion} -> {:ok, %{completion: completion(completion)}}
@@ -169,10 +247,20 @@ defmodule Urchin.Dispatcher do
   end
 
   defp do_handle(server, "logging/setLevel", params, ctx) do
-    with_callback(server, :set_log_level, 2, fn ->
+    # logging/setLevel is a library builtin, available only when the server advertises the
+    # logging capability. The level is validated, the optional set_log_level/2 hook runs, and
+    # the session level is updated only after both succeed, so a failed call leaves no change.
+    if logging_advertised?(server) do
       level = require_string(params, "level")
-      empty_result(server.set_log_level(level, ctx), ctx)
-    end)
+
+      with :ok <- validate_log_level(level),
+           :ok <- run_log_level_hook(server, level, ctx),
+           :ok <- set_session_log_level(ctx, level) do
+        {:ok, %{}}
+      end
+    else
+      {:error, Error.method_not_found("Server does not support logging/setLevel")}
+    end
   end
 
   defp do_handle(_server, method, _params, _ctx) do
@@ -187,11 +275,18 @@ defmodule Urchin.Dispatcher do
       %Result.CallTool{} = result -> {:ok, Result.CallTool.to_map(result)}
       {:ok, content} when is_list(content) -> {:ok, %{content: content, isError: false}}
       {:ok, content, opts} when is_list(content) -> {:ok, call_tool_map(content, opts)}
-      other -> normalize_error(other, ctx)
+      {:error, {:invalid_tool_input, reason}} -> invalid_tool_input(reason, ctx)
+      other -> tool_error_result(other, ctx)
     end
   rescue
+    error in Urchin.Error ->
+      # A deliberately raised Urchin.Error is a protocol-level error, matching a returned
+      # {:error, %Urchin.Error{}}: it stays a JSON-RPC error rather than an isError result.
+      {:error, error}
+
     exception ->
-      # A tool that raises reports a tool-execution error so the model can self-correct.
+      # A tool that raises any other exception reports a tool-execution error so the model
+      # can self-correct.
       Logger.error(
         "Urchin tool #{name} crashed: " <>
           Exception.format(:error, exception, __STACKTRACE__)
@@ -199,6 +294,21 @@ defmodule Urchin.Dispatcher do
 
       text = generic_or(ctx, Exception.message(exception), "Tool execution failed")
       {:ok, %{content: [Urchin.Content.text(text)], isError: true}}
+  end
+
+  # A handler's {:error, binary} is a tool-execution error: it becomes an isError CallToolResult
+  # (so the model can self-correct) per the MCP tool error semantics, not a JSON-RPC error. A
+  # protocol-level {:error, %Error{}} and every other shape still go through normalize_error.
+  defp tool_error_result({:error, message}, _ctx) when is_binary(message) do
+    {:ok, %{content: [Urchin.Content.text(message)], isError: true}}
+  end
+
+  defp tool_error_result(other, ctx), do: normalize_error(other, ctx)
+
+  # An input-schema validation failure is likewise a tool-execution error: an isError
+  # CallToolResult so the model can self-correct, not a JSON-RPC protocol error.
+  defp invalid_tool_input(reason, _ctx) do
+    {:ok, %{content: [Urchin.Content.text(reason)], isError: true}}
   end
 
   defp call_tool_map(content, opts) do
@@ -218,12 +328,55 @@ defmodule Urchin.Dispatcher do
   defp empty_result({:ok, _}, _ctx), do: {:ok, %{}}
   defp empty_result(other, ctx), do: normalize_error(other, ctx)
 
-  defp completion(values) when is_list(values), do: %{values: values}
+  @max_completion_values 100
+
+  defp completion(values) when is_list(values), do: build_completion(values, nil, nil)
 
   defp completion(%{} = completion) do
-    %{values: get_either(completion, :values, "values", [])}
-    |> maybe_put(:total, get_either(completion, :total, "total", nil))
-    |> maybe_put(:hasMore, get_either(completion, :has_more, "hasMore", nil))
+    build_completion(
+      get_either(completion, :values, "values", []),
+      get_either(completion, :total, "total", nil),
+      get_either(completion, :has_more, "hasMore", nil)
+    )
+  end
+
+  defp completion(_other) do
+    raise Error.internal_error("completion result must be a map or a list of values")
+  end
+
+  # CompleteResult.completion is `{ values: string[], total?: number, hasMore?: boolean }`. A
+  # malformed result is a server bug, so it surfaces as an internal error rather than shipping a
+  # non-conforming response. The spec also caps values at 100 per response; when a handler returns
+  # more, the list is truncated to the top 100 (already ranked) and hasMore is necessarily true.
+  defp build_completion(values, total, has_more) do
+    validate_completion_result!(values, total, has_more)
+
+    {capped, has_more} =
+      if length(values) > @max_completion_values do
+        {Enum.take(values, @max_completion_values), true}
+      else
+        {values, has_more}
+      end
+
+    %{values: capped}
+    |> maybe_put(:total, total)
+    |> maybe_put(:hasMore, has_more)
+  end
+
+  defp validate_completion_result!(values, total, has_more) do
+    cond do
+      not (is_list(values) and Enum.all?(values, &is_binary/1)) ->
+        raise Error.internal_error("completion values must be a list of strings")
+
+      not (is_nil(total) or is_number(total)) ->
+        raise Error.internal_error("completion total must be a number")
+
+      not (is_nil(has_more) or is_boolean(has_more)) ->
+        raise Error.internal_error("completion hasMore must be a boolean")
+
+      true ->
+        :ok
+    end
   end
 
   # Reads a value that may be keyed by atom or string, preserving false/0 values.
@@ -264,6 +417,46 @@ defmodule Urchin.Dispatcher do
     end
   end
 
+  # Apply the client-requested log level to the session when one exists; a nil session
+  # (e.g. a handler invoked in a unit test) is a no-op. If the session died mid-request,
+  # surface a clean error rather than a generic crash from the GenServer.call exit.
+  defp set_session_log_level(%Context{session: session}, level) when is_pid(session) do
+    Session.set_log_level(session, level)
+    :ok
+  catch
+    :exit, _ -> {:error, Error.invalid_request("Session not found")}
+  end
+
+  defp set_session_log_level(_ctx, _level), do: :ok
+
+  # logging/setLevel is offered only when the server advertises the logging capability.
+  # Accept both atom (DSL-derived) and string (hand-written, JSON-shaped) capability keys.
+  defp logging_advertised?(server) do
+    caps = capabilities(server)
+    Map.has_key?(caps, :logging) or Map.has_key?(caps, "logging")
+  end
+
+  defp validate_log_level(level) do
+    if level in Context.log_levels() do
+      :ok
+    else
+      {:error, Error.invalid_params("Invalid log level: " <> level)}
+    end
+  end
+
+  # Runs the optional set_log_level/2 hook; a missing hook is a no-op success.
+  defp run_log_level_hook(server, level, ctx) do
+    if exported?(server, :set_log_level, 2) do
+      case server.set_log_level(level, ctx) do
+        :ok -> :ok
+        {:ok, _} -> :ok
+        other -> normalize_error(other, ctx)
+      end
+    else
+      :ok
+    end
+  end
+
   defp capabilities(server) do
     if exported?(server, :capabilities, 0), do: server.capabilities(), else: %{}
   end
@@ -294,11 +487,71 @@ defmodule Urchin.Dispatcher do
     end
   end
 
+  # CallToolRequestParams.arguments is, when present, an object. A non-object value is a malformed
+  # request (CallToolRequest shape violation), not a tool input-schema error, so it stays a
+  # protocol-level JSON-RPC error rather than an isError tool result.
+  defp require_arguments_object(args) when is_map(args), do: :ok
+
+  defp require_arguments_object(_args),
+    do: {:error, Error.invalid_params("tools/call arguments must be an object")}
+
   defp require_map(params, key) do
     case Map.get(params, key) do
       value when is_map(value) -> value
       _ -> raise Error.invalid_params(~s(Missing or invalid object param "#{key}"))
     end
+  end
+
+  # CompleteRequestParams.ref is a discriminated union: ref/prompt carries a string name,
+  # ref/resource carries a string uri. Anything else is a malformed request.
+  defp require_completion_ref(params) do
+    ref = require_map(params, "ref")
+
+    case Map.get(ref, "type") do
+      "ref/prompt" -> _ = require_string(ref, "name")
+      "ref/resource" -> _ = require_string(ref, "uri")
+      other -> raise Error.invalid_params("completion ref.type is invalid: #{inspect(other)}")
+    end
+
+    ref
+  end
+
+  # CompleteRequestParams.argument is `{ name: string, value: string }`, both required.
+  defp require_completion_argument(params) do
+    argument = require_map(params, "argument")
+    _ = require_string(argument, "name")
+    _ = require_string(argument, "value")
+    argument
+  end
+
+  # CompleteRequestParams.context is optional; its `arguments` map, when present, maps argument
+  # names to string values.
+  defp require_completion_context(params) do
+    case Map.get(params, "context") do
+      nil ->
+        %{}
+
+      %{} = context ->
+        validate_context_arguments!(Map.get(context, "arguments"))
+        context
+
+      _ ->
+        raise Error.invalid_params("completion context must be an object")
+    end
+  end
+
+  defp validate_context_arguments!(nil), do: :ok
+
+  defp validate_context_arguments!(arguments) when is_map(arguments) do
+    if Enum.all?(arguments, fn {_k, v} -> is_binary(v) end) do
+      :ok
+    else
+      raise Error.invalid_params("completion context.arguments values must be strings")
+    end
+  end
+
+  defp validate_context_arguments!(_other) do
+    raise Error.invalid_params("completion context.arguments must be an object")
   end
 
   # Rescued exceptions are always logged in full but, by default, are not surfaced to the

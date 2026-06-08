@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This release makes the server enforce the MCP specification by default. Several behaviors
+that were previously absent or lenient are now always on; see Changed for the breaking
+details and how to adapt.
+
 ### Added
 
 - Session lifecycle limits: `:max_sessions` (reject new sessions with `503` past a cap —
@@ -19,19 +23,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Declarative tool scopes: `tool "name", scopes: ["files:write"], ...` enforces the scopes
   against `ctx.auth` before the handler runs, failing closed when the request carries no
   authorization.
-- `:validate_arguments` transport option (default `false`) validates `tools/call` arguments
-  against each DSL tool's `input_schema` and rejects a mismatch with `invalid_params` before
-  the handler runs. `Urchin.Schema` implements the supported (minimal) JSON Schema subset.
 - `:expose_internal_errors` transport option (default `false`). Unexpected exceptions and
   malformed handler returns are now logged in full but return a generic message to the
   client; enable the option to surface the detail in development. Deliberate `Urchin.Error`
-  values and `{:error, message}` returns still pass through unchanged.
+  values and `{:error, message}` returns are never redacted — their `message`/`data` reach the
+  client unchanged.
 - Capability guards: `Urchin.Context.create_message/3`, `elicit/3` and `list_roots/2`
   return an error without contacting the client when it did not advertise the matching
   `sampling`/`elicitation`/`roots` capability.
 - `415 Unsupported Media Type` for POST requests whose `Content-Type` is not
   `application/json`.
 - `SECURITY.md` with a threat model, deployment checklist and vulnerability reporting.
+- `:sse_buffer_limit` transport option (default `nil`, preserving the session's internal
+  default of `100`) forwarding the per-session GET-stream replay buffer size to the session;
+  previously only configurable on `Urchin.Session` directly.
+
+### Changed
+
+The following are now enforced by default, with no opt-out, for MCP spec compliance. They are
+breaking relative to `0.2.0`.
+
+- A DSL tool's `tools/call` arguments are validated against its `input_schema` before the
+  handler runs; a mismatch is returned as a `CallToolResult` with `isError: true` so the model
+  can self-correct. A tool that declares no `input_schema` now defaults to an object that
+  accepts no properties (`additionalProperties: false`), so unexpected arguments are rejected —
+  declare an explicit `input_schema` to accept arbitrary fields. A non-object `arguments` value
+  is a malformed request and remains a JSON-RPC `invalid_params` error. Servers that implement
+  `call_tool/3` by hand validate their own arguments. `Urchin.Schema` implements the supported
+  (minimal) JSON Schema subset.
+- Operation requests received before the client sends `notifications/initialized` are rejected
+  with `invalid_request`; only `ping` is allowed before initialization (the lifecycle's
+  pings-and-logging exception is for the server's own requests, not the client's
+  `logging/setLevel`). Clients must complete the lifecycle handshake before issuing other
+  requests.
+- A `tools/call` handler's `{:error, message}` (string) is returned as a `CallToolResult` with
+  `isError: true` so the model can self-correct. A protocol error returned as
+  `{:error, %Urchin.Error{}}` is always a JSON-RPC error. (Previously a string handler error
+  became a JSON-RPC internal error.)
+- Duplicate literal tool names within a server are rejected at compile time (a silently shadowed
+  duplicate was previously accepted, with the last declaration winning); non-literal names (a
+  variable or expression) cannot be compared statically and are not checked. Urchin enforces no
+  tool-name pattern (the MCP schema imposes none); servers should still follow the MCP naming
+  recommendations.
+- `initialize` requires `protocolVersion` (string), `capabilities` (object) and `clientInfo`
+  (with a string `name` and `version`); a missing or mistyped field is an `invalid_params`
+  error rather than a silently-defaulted value. The server's `serverInfo` must likewise carry a
+  string `name` and `version`.
+- The `MCP-Protocol-Version` header is validated on `DELETE`, matching `POST` and `GET`.
+- `completion/complete` request params are validated (`ref` as a `ref/prompt`/`ref/resource`
+  union, `argument.name`/`value` as strings, `context.arguments` values as strings) and return
+  `invalid_params` when malformed. Results are capped at 100 values — a handler returning more is
+  truncated to the top 100 (already ranked by relevance) with `hasMore` set — and a
+  non-conforming result shape (non-string `values`, etc.) is an internal error.
+- A tool's `input_schema` and `output_schema` must be JSON Schema objects whose root `type` is
+  `"object"` (per the MCP tools spec); the DSL rejects a non-conforming schema at compile time.
+- `logging/setLevel` is now a library builtin: when the server advertises the `logging`
+  capability (via `use Urchin.Server, logging: true`) it succeeds and applies the level to the
+  session even without a `set_log_level/2` callback. The level is validated against the MCP log
+  levels (`invalid_params` otherwise), an exported `set_log_level/2` still runs as a hook, and
+  the session level is updated only after the hook succeeds. Servers that do not advertise
+  `logging` return `method_not_found`.
+
+### Fixed
+
+- README no longer claims unqualified "resumable SSE streams"; resumption is scoped to the
+  GET stream, matching the implementation.
 
 ## [0.2.0] - 2026-06-05
 

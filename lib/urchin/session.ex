@@ -108,15 +108,20 @@ defmodule Urchin.Session do
   @doc """
   Handles a client-originated notification or response delivered over POST.
 
-  Notifications (`notifications/cancelled`, `notifications/initialized`, ...) update
-  session state; responses are correlated to a pending outbound request.
+  Notifications (`notifications/cancelled`, ...) update session state; responses are correlated
+  to a pending outbound request. `notifications/initialized` is committed synchronously via
+  `mark_initialized/1`, not through this path.
   """
   @spec handle_client_message(pid(), Urchin.JSONRPC.decoded()) :: :ok
   def handle_client_message(pid, message), do: GenServer.cast(pid, {:client_message, message})
 
   @doc "Sets the minimum log level the client wishes to receive."
   @spec set_log_level(pid(), String.t()) :: :ok
-  def set_log_level(pid, level), do: GenServer.cast(pid, {:set_log_level, level})
+  def set_log_level(pid, level), do: GenServer.call(pid, {:set_log_level, level})
+
+  @doc "Marks the session initialized synchronously (after notifications/initialized)."
+  @spec mark_initialized(pid()) :: :ok
+  def mark_initialized(pid), do: GenServer.call(pid, :mark_initialized)
 
   @doc "Registers (or replaces) the GET general stream, returning events to replay."
   @spec register_general_stream(pid(), pid(), {String.t(), non_neg_integer()} | nil) ::
@@ -162,7 +167,7 @@ defmodule Urchin.Session do
       general_stream_id: "g0",
       general_seq: 0,
       general_buffer: [],
-      buffer_limit: Keyword.get(opts, :buffer_limit, @default_buffer_limit),
+      buffer_limit: Keyword.get(opts, :buffer_limit) || @default_buffer_limit,
       inflight: %{},
       cancelled: MapSet.new(),
       outbound: %{},
@@ -194,10 +199,19 @@ defmodule Urchin.Session do
       protocol_version: state.protocol_version,
       client_info: state.client_info,
       client_capabilities: state.client_capabilities,
-      min_log_level: state.min_log_level
+      min_log_level: state.min_log_level,
+      initialized: state.initialized
     }
 
     {:reply, snapshot, touch(state)}
+  end
+
+  def handle_call(:mark_initialized, _from, state) do
+    {:reply, :ok, touch(%{state | initialized: true})}
+  end
+
+  def handle_call({:set_log_level, level}, _from, state) do
+    {:reply, :ok, %{state | min_log_level: level}}
   end
 
   def handle_call({:start_request, request_id, task_pid, owner_pid}, _from, state) do
@@ -268,10 +282,6 @@ defmodule Urchin.Session do
     {:noreply, %{state | outbound: drop_outbound(state.outbound, id)}}
   end
 
-  def handle_cast({:set_log_level, level}, state) do
-    {:noreply, %{state | min_log_level: level}}
-  end
-
   def handle_cast({:subscribe, uri}, state) do
     {:noreply, %{state | subscriptions: MapSet.put(state.subscriptions, uri)}}
   end
@@ -334,9 +344,8 @@ defmodule Urchin.Session do
 
   ## Internal: client message handling
 
-  defp handle_client({:notification, "notifications/initialized", _params}, state) do
-    %{state | initialized: true}
-  end
+  # notifications/initialized is committed synchronously via mark_initialized/1 (the transport
+  # routes it there so the next request observes initialized: true), so it is not handled here.
 
   defp handle_client({:notification, "notifications/cancelled", params}, state) do
     request_id = Map.get(params, "requestId")

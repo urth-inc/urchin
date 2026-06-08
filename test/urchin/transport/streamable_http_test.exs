@@ -52,6 +52,11 @@ defmodule Urchin.Transport.StreamableHTTPTest do
 
     assert conn.status == 200
     [session_id] = get_resp_header(conn, "mcp-session-id")
+
+    # Complete the handshake so subsequent operation requests pass the lifecycle gate.
+    ack = call_with_session(%{jsonrpc: "2.0", method: "notifications/initialized"}, session_id)
+    assert ack.status == 202
+
     {session_id, Jason.decode!(conn.resp_body)}
   end
 
@@ -236,7 +241,11 @@ defmodule Urchin.Transport.StreamableHTTPTest do
             jsonrpc: "2.0",
             id: 1,
             method: "initialize",
-            params: %{"protocolVersion" => "2025-11-25", "capabilities" => %{}}
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
           },
           [{"origin", "http://localhost:3000"}]
         )
@@ -267,6 +276,19 @@ defmodule Urchin.Transport.StreamableHTTPTest do
 
       assert conn.status == 204
       assert wait_for_termination(session_id) == :ok
+    end
+
+    test "DELETE rejects an unsupported MCP-Protocol-Version" do
+      {session_id, _} = init_session()
+
+      conn =
+        conn(:delete, "/")
+        |> put_req_header("mcp-session-id", session_id)
+        |> put_req_header("mcp-protocol-version", "1999-01-01")
+        |> StreamableHTTP.call(@opts)
+
+      assert conn.status == 400
+      assert Jason.decode!(conn.resp_body)["error"]["code"] == -32_600
     end
 
     test "DELETE is 405 when disabled" do
@@ -321,6 +343,154 @@ defmodule Urchin.Transport.StreamableHTTPTest do
       assert status.("application/json-bogus") == 415
       assert status.("text/plain; application/json") == 415
       assert status.("x-application/json") == 415
+    end
+  end
+
+  describe "initialized lifecycle gate" do
+    test "gates operation requests until notifications/initialized" do
+      init_conn =
+        post(%{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "c", "version" => "1"}
+          }
+        })
+
+      assert init_conn.status == 200
+      [session_id] = get_resp_header(init_conn, "mcp-session-id")
+      headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
+
+      # Before notifications/initialized: rejected as invalid_request.
+      before = post(%{jsonrpc: "2.0", id: 2, method: "tools/list"}, headers)
+      assert before.status == 200
+      assert Jason.decode!(before.resp_body)["error"]["code"] == -32_600
+
+      # Acknowledge initialization.
+      ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, headers)
+      assert ack.status == 202
+
+      # After: allowed.
+      after_conn = post(%{jsonrpc: "2.0", id: 3, method: "tools/list"}, headers)
+      assert after_conn.status == 200
+      assert is_list(Jason.decode!(after_conn.resp_body)["result"]["tools"])
+    end
+  end
+
+  describe "sse_buffer_limit option" do
+    test "validates and defaults" do
+      assert %{sse_buffer_limit: nil} = StreamableHTTP.init(server: EchoServer)
+      assert %{sse_buffer_limit: 5} = StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 5)
+
+      assert_raise ArgumentError, fn ->
+        StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 0)
+      end
+
+      assert_raise ArgumentError, fn ->
+        StreamableHTTP.init(server: EchoServer, sse_buffer_limit: -1)
+      end
+    end
+
+    test "is forwarded to the session created by the transport" do
+      opts = StreamableHTTP.init(server: EchoServer, sse_buffer_limit: 1)
+
+      conn =
+        post(
+          %{
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: %{
+              "protocolVersion" => "2025-11-25",
+              "capabilities" => %{},
+              "clientInfo" => %{"name" => "c", "version" => "1"}
+            }
+          },
+          [],
+          opts
+        )
+
+      assert conn.status == 200
+      [session_id] = get_resp_header(conn, "mcp-session-id")
+      pid = Urchin.Session.whereis(session_id)
+
+      Urchin.Session.notify(pid, "notifications/message", %{"n" => 1})
+      Urchin.Session.notify(pid, "notifications/message", %{"n" => 2})
+
+      # With the buffer capped at 1, only the most recent event is available to replay.
+      {:ok, "g0", replay} = Urchin.Session.register_general_stream(pid, self(), {"g0", 0})
+      assert length(replay) == 1
+
+      Urchin.Session.terminate(pid)
+    end
+  end
+
+  describe "tool errors over the transport" do
+    test "a handler {:error, message} becomes an isError result" do
+      {session_id, _} = init_session()
+
+      conn =
+        call_with_session(
+          %{
+            jsonrpc: "2.0",
+            id: 20,
+            method: "tools/call",
+            params: %{name: "failing", arguments: %{}}
+          },
+          session_id
+        )
+
+      assert conn.status == 200
+      body = Jason.decode!(conn.resp_body)
+      assert body["result"]["isError"] == true
+      assert body["result"]["content"] == [%{"type" => "text", "text" => "tool said no"}]
+    end
+  end
+
+  describe "logging/setLevel over the transport" do
+    test "updates the session min_log_level" do
+      {session_id, _} = init_session()
+      pid = Urchin.Session.whereis(session_id)
+
+      conn =
+        call_with_session(
+          %{jsonrpc: "2.0", id: 21, method: "logging/setLevel", params: %{level: "error"}},
+          session_id
+        )
+
+      assert conn.status == 200
+      assert Jason.decode!(conn.resp_body)["result"] == %{}
+      assert Urchin.Session.snapshot(pid).min_log_level == "error"
+    end
+  end
+
+  describe "client notifications before initialized" do
+    test "client notifications are accepted with 202 before initialized" do
+      init =
+        post(%{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "c", "version" => "1"}
+          }
+        })
+
+      [session_id] = get_resp_header(init, "mcp-session-id")
+      headers = [{"mcp-session-id", session_id}, {"mcp-protocol-version", "2025-11-25"}]
+
+      cancelled =
+        post(
+          %{jsonrpc: "2.0", method: "notifications/cancelled", params: %{requestId: "x"}},
+          headers
+        )
+
+      assert cancelled.status == 202
     end
   end
 end

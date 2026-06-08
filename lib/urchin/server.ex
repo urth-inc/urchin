@@ -34,6 +34,11 @@ defmodule Urchin.Server do
 
   Capabilities are derived automatically from the declared features.
 
+  Duplicate literal tool names declared via the DSL are rejected at compile time (non-literal
+  names cannot be compared statically and are not checked). Urchin enforces no tool-name pattern
+  (the MCP schema imposes none); servers should still follow the MCP naming recommendations (a
+  conservative charset, a length bound, no whitespace).
+
   ## Behaviour
 
   Implement the callbacks directly for full control or stateful servers. All
@@ -48,8 +53,11 @@ defmodule Urchin.Server do
     * `read_resource/2`: `{:ok, contents}` or `{:error, reason}`
     * `get_prompt/3`: `{:ok, messages}` or `{:ok, messages, description}`
 
-  Any `{:error, reason}` where `reason` is a string or `Urchin.Error` becomes a JSON-RPC
-  error; raised exceptions become internal errors.
+  For every callback, a returned or raised `Urchin.Error` becomes that JSON-RPC error. A
+  `call_tool/3` handler's `{:error, binary}` is surfaced as a `CallToolResult` with `isError: true`
+  so the model can self-correct, as is a tool that raises any other exception. For the other
+  callbacks an `{:error, binary}` becomes a JSON-RPC internal error and any other raised exception
+  becomes an internal error.
   """
 
   alias Urchin.{Context, Error}
@@ -247,6 +255,33 @@ defmodule Urchin.Server do
     raise ArgumentError, "tool :scopes must be a list of strings, got: #{inspect(other)}"
   end
 
+  # Duplicate tool names within a server are rejected at compile time (a silently shadowed
+  # duplicate is a bug). The MCP schema imposes no tool-name pattern, so none is enforced.
+  # Non-literal names (a variable or call) cannot be compared statically and are skipped,
+  # mirroring handler_name/2.
+  defp validate_tool_names!(tool_dispatch) do
+    tool_dispatch
+    |> Enum.map(fn {name, _fname, _scopes} -> name end)
+    |> Enum.filter(&is_binary/1)
+    |> validate_unique_tool_names!()
+  end
+
+  defp validate_unique_tool_names!(names) do
+    duplicates =
+      names
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_name, count} -> count > 1 end)
+      |> Enum.map(fn {name, _count} -> name end)
+
+    case duplicates do
+      [] ->
+        :ok
+
+      dups ->
+        raise ArgumentError, "duplicate tool name(s): #{Enum.map_join(dups, ", ", &inspect/1)}"
+    end
+  end
+
   # Generates a deterministic private handler name. Determinism matters because Mix's
   # incremental compiler assumes stable output for unchanged sources.
   defp handler_name(prefix, name) when is_binary(name) do
@@ -263,7 +298,10 @@ defmodule Urchin.Server do
     mod = env.module
     opts = Module.get_attribute(mod, :mcp_opts) || []
 
-    has_tools? = Module.get_attribute(mod, :mcp_tool_dispatch) != []
+    tool_dispatch = Module.get_attribute(mod, :mcp_tool_dispatch) || []
+    validate_tool_names!(tool_dispatch)
+
+    has_tools? = tool_dispatch != []
     has_resources? = Module.get_attribute(mod, :mcp_resources) != []
     has_templates? = Module.get_attribute(mod, :mcp_resource_templates) != []
     has_prompts? = Module.get_attribute(mod, :mcp_prompt_dispatch) != []
@@ -430,20 +468,22 @@ defmodule Urchin.Server do
 
   @doc false
   @spec __validate_tool_args__(String.t(), map(), Context.t(), [Urchin.Tool.t()]) ::
-          :ok | {:error, Urchin.Error.t()}
-  def __validate_tool_args__(_name, _args, %Context{validate_arguments: false}, _tools), do: :ok
-
+          :ok | {:error, {:invalid_tool_input, String.t()}}
   def __validate_tool_args__(name, args, _ctx, tools) do
-    # Use the same effective schema the wire advertises: an omitted input_schema means an
-    # object, so validation is not silently skipped for a tool that declared no schema.
+    # Use the same effective schema the wire advertises (Tool.default_input_schema/0 when the tool
+    # declared none), so validation is not silently skipped for a tool that declared no schema.
     schema =
       Enum.find_value(tools, fn tool ->
-        if tool.name == name, do: tool.input_schema || %{"type" => "object"}
+        if tool.name == name, do: tool.input_schema || Urchin.Tool.default_input_schema()
       end)
 
+    # By the time args reaches here it is already an object (the dispatcher rejects a non-object
+    # CallToolRequestParams.arguments as a protocol error). What remains is input-schema validation
+    # (missing required field, wrong property type, ...), which is a tool-input error: the dispatcher
+    # shapes it as an isError CallToolResult, not a JSON-RPC error.
     case Urchin.Schema.validate(schema, args) do
       :ok -> :ok
-      {:error, reason} -> {:error, Urchin.Error.invalid_params(reason)}
+      {:error, reason} -> {:error, {:invalid_tool_input, reason}}
     end
   end
 

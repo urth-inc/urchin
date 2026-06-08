@@ -30,12 +30,18 @@ defmodule Urchin.Transport.StreamableHTTP do
       tool run, since it can expire a session mid-request.
     * `:expose_internal_errors` - return raised-exception messages to the client instead of a
       generic error (default `false`). Exceptions are always logged; enable only in development.
-    * `:validate_arguments` - validate `tools/call` arguments against each tool's
-      `input_schema` (DSL tools) before the handler runs, rejecting a mismatch with
-      `invalid_params` (default `false`). See `Urchin.Schema` for the supported subset.
+    * `:sse_buffer_limit` - the maximum number of recent general-stream (GET SSE) events each
+      session keeps for resumption replay. Defaults to `nil`, which preserves the session's
+      internal default of `100`. A positive integer or `nil`.
     * `:auth` - an `Urchin.Auth` (or keyword options) to require OAuth 2.1 bearer tokens on
       every request; `nil` (default) serves MCP unauthenticated. The metadata discovery
       endpoint is served by `Urchin.Endpoint`/`Urchin.Auth.Metadata`, not this plug.
+
+  The transport enforces the spec by default and these behaviors are not configurable: it
+  validates a DSL tool's `tools/call` arguments against its input schema (a hand-written
+  `call_tool/3` validates its own arguments), rejects operation requests received before
+  `notifications/initialized` (only `ping` is allowed pre-init), and surfaces a tool handler's
+  `{:error, binary}` as an `isError` `CallToolResult`.
 
   The plug reads the raw request body itself, so mount it before any JSON body parser.
   """
@@ -68,10 +74,10 @@ defmodule Urchin.Transport.StreamableHTTP do
       request_timeout: Keyword.get(opts, :request_timeout, 60_000),
       validate_protocol_version: Keyword.get(opts, :validate_protocol_version, true),
       expose_internal_errors: Keyword.get(opts, :expose_internal_errors, false),
-      validate_arguments: Keyword.get(opts, :validate_arguments, false),
       max_sessions: positive_integer_opt!(opts, :max_sessions),
       session_idle_timeout: positive_integer_opt!(opts, :session_idle_timeout),
       session_max_lifetime: positive_integer_opt!(opts, :session_max_lifetime),
+      sse_buffer_limit: positive_integer_opt!(opts, :sse_buffer_limit),
       auth: Auth.coerce!(Keyword.get(opts, :auth))
     }
   end
@@ -163,16 +169,20 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   defp start_session(conn, config, id, result, meta, server_state, reservation) do
-    case Session.start(
-           server: config.server,
-           server_state: server_state,
-           protocol_version: meta.protocol_version,
-           client_info: meta.client_info,
-           client_capabilities: meta.client_capabilities,
-           min_log_level: config.min_log_level,
-           idle_timeout: config.session_idle_timeout,
-           max_lifetime: config.session_max_lifetime
-         ) do
+    session_opts =
+      [
+        server: config.server,
+        server_state: server_state,
+        protocol_version: meta.protocol_version,
+        client_info: meta.client_info,
+        client_capabilities: meta.client_capabilities,
+        min_log_level: config.min_log_level,
+        idle_timeout: config.session_idle_timeout,
+        max_lifetime: config.session_max_lifetime
+      ]
+      |> maybe_put_buffer_limit(config.sse_buffer_limit)
+
+    case Session.start(session_opts) do
       {:ok, session_id, pid} ->
         # Hand the reserved slot to the session. If the limiter no longer knows the
         # reservation (e.g. it restarted since reserve/1), the session would be uncounted,
@@ -207,6 +217,20 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   # Notifications and responses are acknowledged with 202 and routed into the session.
+  # notifications/initialized is committed synchronously so that, once the client has the
+  # 202, a subsequent request always observes initialized: true in the session snapshot.
+  defp route_session_message(
+         conn,
+         _config,
+         session_pid,
+         {:notification, "notifications/initialized", _params}
+       ) do
+    case mark_initialized_safe(session_pid) do
+      :ok -> send_resp(conn, 202, "")
+      {:error, status, error} -> send_error(conn, status, nil, error)
+    end
+  end
+
   defp route_session_message(conn, _config, session_pid, {:notification, _m, _p} = msg) do
     Session.handle_client_message(session_pid, msg)
     send_resp(conn, 202, "")
@@ -244,7 +268,7 @@ defmodule Urchin.Transport.StreamableHTTP do
       auth: conn_auth(conn),
       min_log_level: snapshot.min_log_level,
       expose_internal_errors: config.expose_internal_errors,
-      validate_arguments: config.validate_arguments
+      initialized: snapshot.initialized
     }
 
     {task_pid, task_ref} =
@@ -419,13 +443,14 @@ defmodule Urchin.Transport.StreamableHTTP do
   end
 
   defp handle_delete(conn, config) do
-    case lookup_session(conn, config) do
-      {:ok, session_pid} ->
-        Session.terminate(session_pid)
-        send_resp(conn, 204, "")
-
-      {:error, status, error} ->
-        send_error(conn, status, nil, error)
+    # DELETE is a post-initialize request, so it carries the MCP-Protocol-Version header like POST
+    # and GET; validate it before terminating the session.
+    with {:ok, session_pid} <- lookup_session(conn, config),
+         :ok <- check_protocol_version(conn, config) do
+      Session.terminate(session_pid)
+      send_resp(conn, 204, "")
+    else
+      {:error, status, error} -> send_error(conn, status, nil, error)
     end
   end
 
@@ -451,6 +476,17 @@ defmodule Urchin.Transport.StreamableHTTP do
           {:error, 400, Error.invalid_request("Session required")}
         end
     end
+  end
+
+  # notifications/initialized commits synchronously via a GenServer.call so the next request
+  # observes initialized: true. lookup_session/2 only proves the session was alive a moment ago, so
+  # a session that terminates in between would make the call exit and crash the Plug process; catch
+  # that and report a clean "Session not found", mirroring lookup_session/2 (and set_log_level).
+  defp mark_initialized_safe(session_pid) do
+    Session.mark_initialized(session_pid)
+    :ok
+  catch
+    :exit, _ -> {:error, 404, Error.invalid_request("Session not found")}
   end
 
   defp check_protocol_version(_conn, %{validate_protocol_version: false}), do: :ok
@@ -517,6 +553,11 @@ defmodule Urchin.Transport.StreamableHTTP do
               "#{inspect(key)} must be a positive integer or nil, got: #{inspect(other)}"
     end
   end
+
+  # When nil, omit the key so the Session keeps its own default (@default_buffer_limit).
+  # Passing buffer_limit: nil would defeat Keyword.get's default and crash push_general.
+  defp maybe_put_buffer_limit(opts, nil), do: opts
+  defp maybe_put_buffer_limit(opts, limit), do: Keyword.put(opts, :buffer_limit, limit)
 
   ## Origin / Accept
 
