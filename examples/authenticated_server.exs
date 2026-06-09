@@ -70,11 +70,11 @@ defmodule Notes do
   end
 end
 
-defmodule Notes.Tokens do
+defmodule Notes.Authorizer do
   @moduledoc false
   # DEV-ONLY stub. Replace with real JWT verification or RFC 7662 introspection.
 
-  @behaviour Urchin.Auth.TokenValidator
+  @behaviour Urchin.Auth.Authorizer
 
   alias Urchin.Auth.Claims
 
@@ -87,11 +87,26 @@ defmodule Notes.Tokens do
   }
 
   @impl true
-  def validate(token, _auth, _conn) do
-    case Map.fetch(@tokens, token) do
-      {:ok, claims} -> {:ok, claims}
+  def authorize(nil, _auth, _conn), do: {:error, :missing, "Authorization required"}
+
+  def authorize(token, auth, conn) do
+    with {:ok, claims} <- Map.fetch(@tokens, token),
+         :ok <- ensure_audience(claims, auth.resource),
+         :ok <- ensure_scopes(claims, Urchin.Auth.required_scopes(auth, conn)) do
+      {:ok, claims}
+    else
       :error -> {:error, :invalid_token}
+      :invalid_audience -> {:error, :invalid_token, "Token audience is invalid"}
+      :insufficient_scope -> {:error, :insufficient_scope, "Insufficient scope"}
     end
+  end
+
+  defp ensure_audience(%Claims{audience: audiences}, resource) do
+    if resource in audiences, do: :ok, else: :invalid_audience
+  end
+
+  defp ensure_scopes(%Claims{} = claims, required) do
+    if Claims.has_scopes?(claims, required), do: :ok, else: :insufficient_scope
   end
 end
 
@@ -102,7 +117,7 @@ auth =
     authorization_servers: ["http://localhost:4001"],
     scopes_supported: ["notes:read", "notes:write"],
     required_scopes: ["notes:read"],
-    token_validator: Notes.Tokens
+    authorizer: Notes.Authorizer
   )
 
 # This is the child spec you drop straight into your own application's supervision

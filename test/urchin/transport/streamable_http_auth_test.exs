@@ -11,7 +11,7 @@ defmodule Urchin.Transport.StreamableHTTPAuthTest do
   @auth Auth.new!(
           resource: "https://mcp.example.com/mcp",
           authorization_servers: ["https://auth.example.com"],
-          token_validator: Urchin.Test.AliceValidator
+          authorizer: Urchin.Test.AliceAuthorizer
         )
 
   @opts StreamableHTTP.init(server: EchoServer, auth: @auth)

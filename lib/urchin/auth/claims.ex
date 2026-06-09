@@ -2,7 +2,7 @@ defmodule Urchin.Auth.Claims do
   @moduledoc """
   Normalized claims for a validated OAuth 2.1 access token.
 
-  An `Urchin.Auth.TokenValidator` returns one of these from `validate/3`. The transport
+  An `Urchin.Auth.Authorizer` returns one of these from `authorize/3`. The transport
   surfaces it to handlers as `ctx.auth` (see `Urchin.Context`), so a handler can make
   per-tool authorization decisions:
 

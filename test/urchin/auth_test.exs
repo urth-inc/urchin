@@ -6,7 +6,7 @@ defmodule Urchin.AuthTest do
 
   @conn %{realm: "alpha"}
 
-  defp ok_validator,
+  defp ok_authorizer,
     do: fn _token, _auth, _conn ->
       {:ok, %Claims{subject: "u1", scopes: ["a"], audience: ["https://mcp.example.com/mcp"]}}
     end
@@ -15,7 +15,7 @@ defmodule Urchin.AuthTest do
     [
       resource: "https://mcp.example.com/mcp",
       authorization_servers: ["https://auth.example.com"],
-      token_validator: ok_validator()
+      authorizer: ok_authorizer()
     ]
     |> Keyword.merge(opts)
     |> Auth.new!()
@@ -24,7 +24,7 @@ defmodule Urchin.AuthTest do
   describe "new!/1 validation" do
     test "requires :resource" do
       assert_raise ArgumentError, ~r/:resource/, fn ->
-        Auth.new!(authorization_servers: ["https://a"], token_validator: ok_validator())
+        Auth.new!(authorization_servers: ["https://a"], authorizer: ok_authorizer())
       end
     end
 
@@ -40,6 +40,12 @@ defmodule Urchin.AuthTest do
 
     test "requires at least one authorization server" do
       assert_raise ArgumentError, ~r/at least one/, fn -> build(authorization_servers: []) end
+    end
+
+    test "rejects an authorization server issuer with a query" do
+      assert_raise ArgumentError, ~r/query/, fn ->
+        build(authorization_servers: ["https://auth.example.com?realm=a"])
+      end
     end
 
     test "rejects an http issuer by default" do
@@ -63,18 +69,28 @@ defmodule Urchin.AuthTest do
       assert auth.authorization_servers == ["http://auth.internal"]
     end
 
-    test "requires a usable :token_validator" do
-      assert_raise ArgumentError, ~r/token_validator/, fn ->
+    test "requires a usable :authorizer" do
+      assert_raise ArgumentError, ~r/authorizer/, fn ->
         Auth.new!(
           resource: "https://m",
           authorization_servers: ["https://a"],
-          token_validator: 123
+          authorizer: 123
         )
       end
     end
 
-    test "rejects a module that does not implement validate/3" do
-      assert_raise ArgumentError, ~r/validate\/3/, fn -> build(token_validator: Enum) end
+    test "rejects a module that does not implement authorize/3" do
+      assert_raise ArgumentError, ~r/authorize\/3/, fn -> build(authorizer: Enum) end
+    end
+
+    test "rejects metadata overrides for owned fields" do
+      assert_raise ArgumentError, ~r/reserved field/, fn ->
+        build(metadata: %{resource: "https://evil.example.com"})
+      end
+
+      assert_raise ArgumentError, ~r/reserved field/, fn ->
+        build(metadata: %{"authorization_servers" => ["https://evil.example.com"]})
+      end
     end
   end
 
@@ -90,7 +106,7 @@ defmodule Urchin.AuthTest do
                Auth.coerce!(
                  resource: "https://mcp.example.com/mcp",
                  authorization_servers: ["https://auth.example.com"],
-                 token_validator: ok_validator()
+                 authorizer: ok_authorizer()
                )
     end
 
@@ -126,7 +142,7 @@ defmodule Urchin.AuthTest do
       assert doc.resource_documentation == "https://docs.example.com"
     end
 
-    test "merges :metadata overrides last" do
+    test "includes extra :metadata fields" do
       doc =
         Auth.metadata_document(build(metadata: %{dpop_bound_access_tokens_required: true}), @conn)
 
@@ -150,6 +166,12 @@ defmodule Urchin.AuthTest do
 
       assert_raise ArgumentError, ~r/HTTPS/, fn ->
         Auth.metadata_document(auth, @conn)
+      end
+
+      query = build(authorization_servers: fn _conn -> ["https://auth.example.com?realm=a"] end)
+
+      assert_raise ArgumentError, ~r/query/, fn ->
+        Auth.metadata_document(query, @conn)
       end
     end
   end
@@ -196,142 +218,93 @@ defmodule Urchin.AuthTest do
                "/.well-known/oauth-protected-resource"
              ]
     end
+
+    test "resource_metadata_url can preserve request tenant context" do
+      auth =
+        build(
+          resource_metadata_url: fn conn ->
+            "https://mcp.example.com/.well-known/oauth-protected-resource/mcp?realm=#{conn.realm}"
+          end
+        )
+
+      assert Auth.resource_metadata_url(auth, %{realm: "tenant-a"}) ==
+               "https://mcp.example.com/.well-known/oauth-protected-resource/mcp?realm=tenant-a"
+    end
+
+    test "rejects a resource_metadata_url with a fragment" do
+      assert_raise ArgumentError, ~r/fragment/, fn ->
+        build(
+          resource_metadata_url: "https://mcp.example.com/.well-known/oauth-protected-resource#x"
+        )
+      end
+    end
   end
 
-  describe "verify_token/4" do
+  describe "authorize/3" do
     test "missing token" do
-      assert {:error, :missing, _} = Auth.verify_token(build([]), nil, [], @conn)
-      assert {:error, :missing, _} = Auth.verify_token(build([]), "", [], @conn)
+      auth = build(authorizer: fn nil, _auth, _conn -> {:error, :missing} end)
+
+      assert {:error, :missing, _} = Auth.authorize(auth, nil, @conn)
+      assert {:error, :missing, _} = Auth.authorize(auth, "", @conn)
     end
 
     test "valid token returns claims" do
-      assert {:ok, %Claims{subject: "u1"}} = Auth.verify_token(build([]), "tok", [], @conn)
+      assert {:ok, %Claims{subject: "u1"}} = Auth.authorize(build([]), "tok", @conn)
     end
 
-    test "a 3-arity function validator receives the auth and conn" do
+    test "a 3-arity function authorizer receives the auth and conn" do
       auth =
         build(
-          token_validator: fn _token, passed_auth, conn ->
+          authorizer: fn _token, passed_auth, conn ->
             assert passed_auth.resource == "https://mcp.example.com/mcp"
             assert conn.realm == "alpha"
             {:ok, %Claims{subject: "u2", audience: ["https://mcp.example.com/mcp"]}}
           end
         )
 
-      assert {:ok, %Claims{subject: "u2"}} = Auth.verify_token(auth, "tok", [], @conn)
+      assert {:ok, %Claims{subject: "u2"}} = Auth.authorize(auth, "tok", @conn)
     end
 
-    test "validator rejection maps to invalid_token" do
-      auth = build(token_validator: fn _, _, _ -> {:error, :invalid_token} end)
-      assert {:error, :invalid_token, _} = Auth.verify_token(auth, "tok", [], @conn)
+    test "authorizer rejection maps to invalid_token" do
+      auth = build(authorizer: fn _, _, _ -> {:error, :invalid_token} end)
+      assert {:error, :invalid_token, _} = Auth.authorize(auth, "tok", @conn)
     end
 
     test "a bare binary rejection reason is not reflected to the client" do
-      auth = build(token_validator: fn _, _, _ -> {:error, "internal: jwks fetch failed"} end)
+      auth = build(authorizer: fn _, _, _ -> {:error, "internal: jwks fetch failed"} end)
 
       assert {:error, :invalid_token, "Invalid access token"} =
-               Auth.verify_token(auth, "tok", [], @conn)
+               Auth.authorize(auth, "tok", @conn)
     end
 
-    test "an expired token (exp claim in the past) is rejected" do
+    test "SDK does not enforce expiry, audience or scopes after authorizer success" do
       past = System.os_time(:second) - 100
-      auth = build(token_validator: fn _, _, _ -> {:ok, %Claims{expires_at: past}} end)
-
-      assert {:error, :invalid_token, "Token has expired"} =
-               Auth.verify_token(auth, "tok", [], @conn)
-    end
-
-    test "a token expiring exactly now is rejected" do
-      now = System.os_time(:second)
-      auth = build(token_validator: fn _, _, _ -> {:ok, %Claims{expires_at: now}} end)
-
-      assert {:error, :invalid_token, "Token has expired"} =
-               Auth.verify_token(auth, "tok", [], @conn)
-    end
-
-    test "a wrong audience is rejected" do
-      auth =
-        build(
-          token_validator: fn _, _, _ ->
-            {:ok, %Claims{audience: ["https://other.example.com"]}}
-          end
-        )
-
-      assert {:error, :invalid_token, message} = Auth.verify_token(auth, "tok", [], @conn)
-      assert message =~ "audience"
-    end
-
-    test "a matching audience passes (exact and prefix)" do
-      exact =
-        build(
-          token_validator: fn _, _, _ ->
-            {:ok, %Claims{audience: ["https://mcp.example.com/mcp"]}}
-          end
-        )
-
-      assert {:ok, _} = Auth.verify_token(exact, "tok", [], @conn)
-
-      origin =
-        build(
-          token_validator: fn _, _, _ ->
-            {:ok, %Claims{audience: ["https://mcp.example.com"]}}
-          end
-        )
-
-      assert {:ok, _} = Auth.verify_token(origin, "tok", [], @conn)
-    end
-
-    test ":auto rejects a token with no audience (fail closed)" do
-      auth = build(token_validator: fn _, _, _ -> {:ok, %Claims{subject: "u1"}} end)
-      assert {:error, :invalid_token, message} = Auth.verify_token(auth, "tok", [], @conn)
-      assert message =~ "audience"
-    end
-
-    test ":skip accepts a token with no audience and ignores a wrong one" do
-      no_aud =
-        build(audience_validation: :skip, token_validator: fn _, _, _ -> {:ok, %Claims{}} end)
-
-      assert {:ok, _} = Auth.verify_token(no_aud, "tok", [], @conn)
-
-      wrong =
-        build(
-          audience_validation: :skip,
-          token_validator: fn _, _, _ ->
-            {:ok, %Claims{audience: ["https://other.example.com"]}}
-          end
-        )
-
-      assert {:ok, _} = Auth.verify_token(wrong, "tok", [], @conn)
-    end
-
-    test "missing required scopes yields insufficient_scope" do
-      aud = ["https://mcp.example.com/mcp"]
 
       auth =
-        build(token_validator: fn _, _, _ -> {:ok, %Claims{scopes: ["a"], audience: aud}} end)
+        build(
+          required_scopes: ["files:read"],
+          authorizer: fn _, _, _ ->
+            {:ok,
+             %Claims{
+               subject: "u1",
+               expires_at: past,
+               scopes: [],
+               audience: ["https://other.example.com"]
+             }}
+          end
+        )
 
-      assert {:error, :insufficient_scope, _} =
-               Auth.verify_token(auth, "tok", ["a", "b"], @conn)
-
-      assert {:ok, _} = Auth.verify_token(auth, "tok", ["a"], @conn)
+      assert {:ok, %Claims{subject: "u1"}} = Auth.authorize(auth, "tok", @conn)
     end
 
-    test "a validator that raises produces a server_error" do
-      auth = build(token_validator: fn _, _, _ -> raise "boom" end)
-      assert {:error, :server_error, _} = Auth.verify_token(auth, "tok", [], @conn)
-    end
-
-    test "a plain map result is normalized via Claims.from_map/1" do
-      payload = %{"sub" => "u9", "scope" => "x y", "aud" => "https://mcp.example.com/mcp"}
-      auth = build(token_validator: fn _, _, _ -> {:ok, payload} end)
-
-      assert {:ok, %Claims{subject: "u9", scopes: ["x", "y"]}} =
-               Auth.verify_token(auth, "tok", [], @conn)
+    test "an authorizer that raises produces a server_error" do
+      auth = build(authorizer: fn _, _, _ -> raise "boom" end)
+      assert {:error, :server_error, _} = Auth.authorize(auth, "tok", @conn)
     end
 
     test "a {:error, kind, message} tuple passes through" do
-      auth = build(token_validator: fn _, _, _ -> {:error, :invalid_request, "bad"} end)
-      assert {:error, :invalid_request, "bad"} = Auth.verify_token(auth, "tok", [], @conn)
+      auth = build(authorizer: fn _, _, _ -> {:error, :invalid_request, "bad"} end)
+      assert {:error, :invalid_request, "bad"} = Auth.authorize(auth, "tok", @conn)
     end
   end
 

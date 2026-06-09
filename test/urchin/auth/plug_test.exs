@@ -13,7 +13,7 @@ defmodule Urchin.Auth.PlugTest do
           authorization_servers: ["https://auth.example.com"],
           scopes_supported: ["files:read", "files:write"],
           required_scopes: ["files:read"],
-          token_validator: Urchin.Test.ScopeValidator
+          authorizer: Urchin.Test.ScopeAuthorizer
         )
 
   @config AuthPlug.init(auth: @auth)
@@ -30,12 +30,12 @@ defmodule Urchin.Auth.PlugTest do
     assert %Claims{subject: "alice"} = AuthPlug.fetch_claims(conn)
   end
 
-  test "passes the request connection to the token validator" do
+  test "passes the request connection to the authorizer" do
     auth =
       Auth.new!(
         resource: "https://mcp.example.com/mcp",
         authorization_servers: ["https://auth.example.com"],
-        token_validator: fn _token, _auth, conn ->
+        authorizer: fn _token, _auth, conn ->
           {:ok,
            %Claims{
              subject: conn.request_path,
@@ -53,6 +53,42 @@ defmodule Urchin.Auth.PlugTest do
 
     refute conn.halted
     assert %Claims{subject: "/tenant-a/mcp"} = AuthPlug.fetch_claims(conn)
+  end
+
+  test "can preserve tenant context from challenge to metadata discovery" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        resource_metadata_url: fn conn ->
+          realm = URI.decode_query(conn.query_string)["realm"]
+          "https://mcp.example.com/.well-known/oauth-protected-resource/mcp?realm=#{realm}"
+        end,
+        authorization_servers: fn conn ->
+          realm = URI.decode_query(conn.query_string)["realm"]
+          ["https://auth.example.com/realms/#{realm}"]
+        end,
+        authorizer: Urchin.Test.RejectAuthorizer
+      )
+
+    auth_config = AuthPlug.init(auth: auth)
+    metadata_config = Urchin.Auth.Metadata.init(auth: auth)
+
+    challenged =
+      conn(:post, "/mcp?realm=tenant-a", "")
+      |> AuthPlug.call(auth_config)
+
+    [challenge] = get_resp_header(challenged, "www-authenticate")
+
+    assert challenge =~
+             ~s(resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp?realm=tenant-a")
+
+    discovered =
+      conn(:get, "/.well-known/oauth-protected-resource/mcp?realm=tenant-a")
+      |> Urchin.Auth.Metadata.call(metadata_config)
+
+    assert Jason.decode!(discovered.resp_body)["authorization_servers"] == [
+             "https://auth.example.com/realms/tenant-a"
+           ]
   end
 
   test "missing token halts with a 401 and a discovery challenge" do

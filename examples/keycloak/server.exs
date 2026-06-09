@@ -1,8 +1,8 @@
 # Run with: mix run examples/keycloak/server.exs
 #
-# A full OAuth 2.1 example backed by a real authorization server (Keycloak). Urchin
-# validates Keycloak-issued access tokens via RFC 7662 token introspection, and the
-# official MCP Inspector drives the whole flow: discovery -> dynamic client registration
+# A full OAuth 2.1 example backed by a real authorization server (Keycloak). The configured
+# authorizer validates Keycloak-issued access tokens via RFC 7662 token introspection, and
+# the official MCP Inspector drives the whole flow: discovery -> dynamic client registration
 # -> login -> token. See README.md for the one-time Keycloak setup (docker compose up +
 # ./setup.sh).
 
@@ -17,13 +17,12 @@ to_string(:code.root_dir())
 
 {:ok, _} = Application.ensure_all_started(:inets)
 
-defmodule Keycloak.Introspection do
+defmodule Keycloak.Authorizer do
   @moduledoc false
-  # Answers "is this token genuine?" by calling Keycloak's RFC 7662 introspection endpoint
-  # with a confidential client's credentials. Urchin enforces audience (RFC 8707) and
-  # scopes around this. DEV-ONLY: the client secret is inlined for the demo.
+  # Makes the full authorization decision by introspecting the token, then checking audience
+  # (RFC 8707) and request scopes. DEV-ONLY: the client secret is inlined for the demo.
 
-  @behaviour Urchin.Auth.TokenValidator
+  @behaviour Urchin.Auth.Authorizer
 
   @endpoint "http://localhost:8080/realms/mcp/protocol/openid-connect/token/introspect"
   @client_id "mcp-resource-server"
@@ -33,7 +32,17 @@ defmodule Keycloak.Introspection do
   @client_secret "mcp-resource-server-secret"
 
   @impl true
-  def validate(token, _auth, _conn) do
+  def authorize(nil, _auth, _conn), do: {:error, :missing, "Authorization required"}
+
+  def authorize(token, auth, conn) do
+    with {:ok, claims} <- introspect(token),
+         :ok <- ensure_audience(claims, auth.resource),
+         :ok <- ensure_scopes(claims, Urchin.Auth.required_scopes(auth, conn)) do
+      {:ok, claims}
+    end
+  end
+
+  defp introspect(token) do
     basic = Base.encode64("#{@client_id}:#{@client_secret}")
     headers = [{~c"authorization", ~c"Basic " ++ String.to_charlist(basic)}]
     body = URI.encode_query(%{"token" => token, "token_type_hint" => "access_token"})
@@ -58,6 +67,18 @@ defmodule Keycloak.Introspection do
       {:error, reason} ->
         {:error, :server_error, "Authorization server unavailable: #{inspect(reason)}"}
     end
+  end
+
+  defp ensure_audience(%Urchin.Auth.Claims{audience: audiences}, resource) do
+    if resource in audiences,
+      do: :ok,
+      else: {:error, :invalid_token, "Token audience is invalid"}
+  end
+
+  defp ensure_scopes(%Urchin.Auth.Claims{} = claims, required) do
+    if Urchin.Auth.Claims.has_scopes?(claims, required),
+      do: :ok,
+      else: {:error, :insufficient_scope, "Insufficient scope"}
   end
 end
 
@@ -97,7 +118,7 @@ auth =
     authorization_servers: ["http://localhost:8080/realms/mcp"],
     scopes_supported: ["notes:read", "notes:write"],
     required_scopes: ["notes:read"],
-    token_validator: Keycloak.Introspection
+    authorizer: Keycloak.Authorizer
   )
 
 children = [{Urchin.Endpoint, server: Notes, port: 4000, path: "/mcp", auth: auth}]

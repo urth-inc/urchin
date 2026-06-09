@@ -219,19 +219,24 @@ it validates inbound bearer tokens and advertises its authorization server throu
 authorization server itself (token/authorization endpoints, PKCE, consent) is external and
 out of scope.
 
-Configure it with `Urchin.Auth.new!/1`. The `:token_validator` is the pluggable seam where
-you verify the token's signature/expiry/issuer (with your JWT or introspection library of
-choice) and return `Urchin.Auth.Claims`. It receives the current request connection so
-multi-tenant servers can resolve the correct realm/JWKS per request:
+Configure it with `Urchin.Auth.new!/1`. The `:authorizer` is the pluggable seam where
+you make the full authorization decision: token validity, expiry, issuer, audience/resource
+binding, scopes and tenant policy. It receives the current request connection so
+multi-tenant servers can resolve the correct realm/JWKS/introspection endpoint per request:
 
 ```elixir
-defmodule Demo.Tokens do
-  @behaviour Urchin.Auth.TokenValidator
+defmodule Demo.Authorizer do
+  @behaviour Urchin.Auth.Authorizer
 
   @impl true
-  def validate(token, _auth, _conn) do
-    case verify_jwt(token) do
+  def authorize(nil, _auth, _conn), do: {:error, :missing, "Authorization required"}
+
+  def authorize(token, auth, conn) do
+    required = Urchin.Auth.required_scopes(auth, conn)
+
+    case verify_jwt_and_policy(token, auth.resource, required, conn) do
       {:ok, payload} -> {:ok, Urchin.Auth.Claims.from_map(payload)}
+      {:error, :insufficient_scope} -> {:error, :insufficient_scope, "Insufficient scope"}
       :error -> {:error, :invalid_token}
     end
   end
@@ -239,16 +244,19 @@ end
 
 auth =
   Urchin.Auth.new!(
-    # canonical server URI; also the expected token audience (RFC 8707)
+    # canonical server URI; authorizers should enforce it as the RFC 8707 audience/resource
     resource: "https://mcp.example.com/mcp",
     authorization_servers: ["https://auth.example.com"],
     scopes_supported: ["mcp:tools", "files:read", "files:write"],
-    token_validator: Demo.Tokens
+    required_scopes: ["mcp:tools"],
+    authorizer: Demo.Authorizer
   )
 ```
 
 For realm-aware deployments, `authorization_servers` may also be `fn conn -> [issuer] end`;
-the metadata endpoint resolves it per request.
+the metadata endpoint resolves it per request. If tenant context is carried in a path segment
+or query string, configure `resource_metadata_url: fn conn -> url end` so the `401`
+challenge points clients to a metadata URL that preserves that context.
 
 The standalone runner serves the discovery document for you, at
 `https://mcp.example.com/.well-known/oauth-protected-resource/mcp`:
@@ -267,9 +275,9 @@ forward "/mcp", to: Urchin.Transport.StreamableHTTP, init_opts: [server: Demo.Se
 ```
 
 Unauthenticated requests get a `401` with a `WWW-Authenticate: Bearer ..., resource_metadata="..."`
-challenge so clients can discover the authorization server; under-scoped tokens get a `403`
-`insufficient_scope`. The validated claims are available to handlers as `ctx.auth` for
-per-tool decisions:
+challenge so clients can discover the authorization server. Authorization failures are mapped
+from the authorizer's `{:error, kind, message}` result. The validated claims are available to
+handlers as `ctx.auth` for per-tool decisions:
 
 Declare required scopes on the tool and they are enforced before the handler runs (this
 fails closed: a request with no authorization is denied):
@@ -299,8 +307,8 @@ tool "delete", description: "Delete a file" do
 end
 ```
 
-See `Urchin.Auth` for the full option list (audience validation, `required_scopes`, extra
-metadata fields).
+See `Urchin.Auth` for the full option list (`authorizer`, `required_scopes`, dynamic metadata
+resolvers and extra metadata fields).
 
 ## The behaviour
 

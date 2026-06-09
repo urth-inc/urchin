@@ -104,9 +104,9 @@ Use `token "notes:read notes:write"` instead and the same `save_note` call succe
 
 | Concern | How |
 | --- | --- |
-| Token validation | `Keycloak.Introspection` calls Keycloak's RFC 7662 introspection endpoint (stdlib `:httpc`, no extra dependency); issuer trust is implicit in introspecting against the realm-scoped endpoint. |
-| Audience binding (RFC 8707) | An Audience mapper puts `http://localhost:4000/mcp` in the token's `aud`; Urchin's default `audience_validation: :auto` rejects tokens not bound to this resource. |
-| Scope enforcement | `required_scopes: ["notes:read"]` gates every request (401 if absent); `save_note` additionally declares `scopes: ["notes:write"]`, enforced as a tool-level JSON-RPC error. |
+| Token validation | `Keycloak.Authorizer` calls Keycloak's RFC 7662 introspection endpoint (stdlib `:httpc`, no extra dependency); issuer trust is implicit in introspecting against the realm-scoped endpoint. |
+| Audience binding (RFC 8707) | An Audience mapper puts `http://localhost:4000/mcp` in the token's `aud`; the configured authorizer rejects tokens not bound to this resource. |
+| Scope enforcement | The configured authorizer enforces `required_scopes: ["notes:read"]` for every request; `save_note` additionally declares `scopes: ["notes:write"]`, enforced as a tool-level JSON-RPC error. |
 | Discovery | Urchin serves RFC 9728 Protected Resource Metadata; the Inspector follows it to Keycloak's RFC 8414 metadata. |
 
 ## Credentials and endpoints

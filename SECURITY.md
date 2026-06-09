@@ -58,8 +58,8 @@ Urchin does **not** yet provide these; supply them in your deployment:
 ## Deployment checklist
 
 - [ ] HTTPS only; redirect URIs are `localhost` or HTTPS.
-- [ ] `:auth` configured with a `token_validator` that verifies signature, expiry, issuer,
-      and audience (or relies on the built-in `:auto` audience check).
+- [ ] `:auth` configured with an `authorizer` that verifies signature/introspection, expiry,
+      issuer, audience/resource binding, scopes and tenant policy.
 - [ ] `:allowed_origins` set explicitly (not the localhost default) for browser clients.
 - [ ] `:ip` bound to the intended interface.
 - [ ] `:expose_internal_errors` left at `false`.

@@ -40,6 +40,9 @@ details and how to adapt.
 - Per-request OAuth authorization server resolution: `authorization_servers` may now be a
   `fn conn -> [issuer] end` resolver, allowing tenant/realm-aware Protected Resource
   Metadata while keeping token audience binding on the configured resource.
+- Per-request OAuth protected resource metadata URL resolution via `resource_metadata_url:
+  fn conn -> url end`, allowing `WWW-Authenticate` challenges to preserve tenant context
+  such as path or query data for the follow-up metadata request.
 
 ### Changed
 
@@ -86,9 +89,15 @@ breaking relative to `0.2.0`.
   levels (`invalid_params` otherwise), an exported `set_log_level/2` still runs as a hook, and
   the session level is updated only after the hook succeeds. Servers that do not advertise
   `logging` return `method_not_found`.
-- `Urchin.Auth.TokenValidator` now uses `validate/3` (`token`, `auth`, `conn`) and
-  3-arity validator functions. The request connection is passed through so validators can
-  select tenant-specific issuers, JWKS, introspection endpoints or policy.
+- `Urchin.Auth` now delegates the full request authorization decision to an injected
+  `Urchin.Auth.Authorizer` (`authorize/3`) or 3-arity function. Urchin extracts bearer
+  tokens, serves metadata, builds `WWW-Authenticate` challenges and passes claims to
+  handlers; token validity, expiry, issuer, audience/resource binding, scopes and tenant
+  policy are owned by the authorizer.
+- Authorization server issuer URLs now reject query strings in addition to fragments.
+- Extra `:metadata` fields may no longer override fields owned by Urchin, such as
+  `resource` and `authorization_servers`.
+- Protected Resource Metadata responses now include `Cache-Control: no-store`.
 
 ### Fixed
 
