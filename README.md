@@ -221,14 +221,15 @@ out of scope.
 
 Configure it with `Urchin.Auth.new!/1`. The `:token_validator` is the pluggable seam where
 you verify the token's signature/expiry/issuer (with your JWT or introspection library of
-choice) and return `Urchin.Auth.Claims`:
+choice) and return `Urchin.Auth.Claims`. It receives the current request connection so
+multi-tenant servers can resolve the correct realm/JWKS per request:
 
 ```elixir
 defmodule Demo.Tokens do
   @behaviour Urchin.Auth.TokenValidator
 
   @impl true
-  def validate(token, _auth) do
+  def validate(token, _auth, _conn) do
     case verify_jwt(token) do
       {:ok, payload} -> {:ok, Urchin.Auth.Claims.from_map(payload)}
       :error -> {:error, :invalid_token}
@@ -245,6 +246,9 @@ auth =
     token_validator: Demo.Tokens
   )
 ```
+
+For realm-aware deployments, `authorization_servers` may also be `fn conn -> [issuer] end`;
+the metadata endpoint resolves it per request.
 
 The standalone runner serves the discovery document for you, at
 `https://mcp.example.com/.well-known/oauth-protected-resource/mcp`:

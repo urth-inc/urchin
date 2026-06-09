@@ -5,7 +5,7 @@ defmodule Urchin.Test.RejectValidator do
   @behaviour Urchin.Auth.TokenValidator
 
   @impl true
-  def validate(_token, _auth), do: {:error, :invalid_token}
+  def validate(_token, _auth, _conn), do: {:error, :invalid_token}
 end
 
 defmodule Urchin.Test.ScopeValidator do
@@ -19,13 +19,13 @@ defmodule Urchin.Test.ScopeValidator do
   @aud ["https://mcp.example.com/mcp"]
 
   @impl true
-  def validate("good", _auth),
+  def validate("good", _auth, _conn),
     do: {:ok, %Claims{subject: "alice", scopes: ["files:read", "files:write"], audience: @aud}}
 
-  def validate("low", _auth),
+  def validate("low", _auth, _conn),
     do: {:ok, %Claims{subject: "bob", scopes: ["other"], audience: @aud}}
 
-  def validate(_token, _auth), do: {:error, :invalid_token}
+  def validate(_token, _auth, _conn), do: {:error, :invalid_token}
 end
 
 defmodule Urchin.Test.AliceValidator do
@@ -37,10 +37,10 @@ defmodule Urchin.Test.AliceValidator do
   alias Urchin.Auth.Claims
 
   @impl true
-  def validate("alice-token", _auth) do
+  def validate("alice-token", _auth, _conn) do
     {:ok,
      %Claims{subject: "alice", scopes: ["mcp:tools"], audience: ["https://mcp.example.com/mcp"]}}
   end
 
-  def validate(_token, _auth), do: {:error, :invalid_token}
+  def validate(_token, _auth, _conn), do: {:error, :invalid_token}
 end

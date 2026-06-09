@@ -30,6 +30,31 @@ defmodule Urchin.Auth.PlugTest do
     assert %Claims{subject: "alice"} = AuthPlug.fetch_claims(conn)
   end
 
+  test "passes the request connection to the token validator" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        authorization_servers: ["https://auth.example.com"],
+        token_validator: fn _token, _auth, conn ->
+          {:ok,
+           %Claims{
+             subject: conn.request_path,
+             audience: ["https://mcp.example.com/mcp"]
+           }}
+        end
+      )
+
+    config = AuthPlug.init(auth: auth)
+
+    conn =
+      conn(:post, "/tenant-a/mcp", "")
+      |> put_req_header("authorization", "Bearer tenant-token")
+      |> AuthPlug.call(config)
+
+    refute conn.halted
+    assert %Claims{subject: "/tenant-a/mcp"} = AuthPlug.fetch_claims(conn)
+  end
+
   test "missing token halts with a 401 and a discovery challenge" do
     conn = run(nil)
     assert conn.halted

@@ -87,7 +87,7 @@ defmodule Notes.Tokens do
   }
 
   @impl true
-  def validate(token, _auth) do
+  def validate(token, _auth, _conn) do
     case Map.fetch(@tokens, token) do
       {:ok, claims} -> {:ok, claims}
       :error -> {:error, :invalid_token}

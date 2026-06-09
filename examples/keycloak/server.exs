@@ -33,7 +33,7 @@ defmodule Keycloak.Introspection do
   @client_secret "mcp-resource-server-secret"
 
   @impl true
-  def validate(token, _auth) do
+  def validate(token, _auth, _conn) do
     basic = Base.encode64("#{@client_id}:#{@client_secret}")
     headers = [{~c"authorization", ~c"Basic " ++ String.to_charlist(basic)}]
     body = URI.encode_query(%{"token" => token, "token_type_hint" => "access_token"})

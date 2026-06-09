@@ -18,7 +18,7 @@ defmodule Urchin.Auth do
           resource: "https://mcp.example.com/mcp",
           authorization_servers: ["https://auth.example.com"],
           scopes_supported: ["mcp:tools", "files:read", "files:write"],
-          token_validator: &MyApp.Tokens.validate/1
+          token_validator: &MyApp.Tokens.validate/3
         )
 
       # one-call runner (also serves the well-known metadata endpoint):
@@ -29,19 +29,21 @@ defmodule Urchin.Auth do
       plug Urchin.Auth.Plug, auth: auth
       forward "/mcp", to: Urchin.Transport.StreamableHTTP, init_opts: [server: MyServer]
 
-  This module is the single source of truth. It is free of `Plug.Conn`: it builds the
-  metadata document and the `WWW-Authenticate` challenges, and it runs token validation
-  (`verify_token/3`). The plugs and the transport glue it to HTTP.
+  This module is the single source of truth: it builds the metadata document and the
+  `WWW-Authenticate` challenges, and it runs token validation (`verify_token/4`). Request
+  context is passed through as an opaque `conn` term so tenant/realm-aware callbacks can
+  resolve per-request authorization data.
 
   ## Options (`new!/1`)
 
     * `:resource` (required) - the canonical server URI, e.g.
       `"https://mcp.example.com/mcp"`. Used as the metadata `resource` field and as the
       expected token audience (RFC 8707). MUST be absolute and MUST NOT carry a fragment.
-    * `:authorization_servers` (required) - a non-empty list of AS issuer URLs, surfaced
-      verbatim in the metadata document.
+    * `:authorization_servers` (required) - a non-empty list of AS issuer URLs, or a
+      1-arity function `fn conn -> [issuer] end`, surfaced in the metadata document.
     * `:token_validator` (required) - a module implementing `Urchin.Auth.TokenValidator`,
-      or a 1-/2-arity function. See that module for the contract.
+      or a 3-arity function `fn token, auth, conn -> result end`. See that module for the
+      contract.
     * `:scopes_supported` - optional list of scopes advertised in the metadata document.
     * `:required_scopes` - scopes every request must carry. A list, or a 1-arity function
       `fn conn -> [scope] end` for per-request requirements. Default `[]`.
@@ -78,13 +80,16 @@ defmodule Urchin.Auth do
     well_known_paths: [],
     metadata: %{},
     audience_validation: :auto,
-    bearer_methods_supported: ["header"]
+    bearer_methods_supported: ["header"],
+    allow_insecure_authorization_servers: false
   ]
+
+  @type authorization_servers :: [String.t()] | (term() -> [String.t()])
 
   @type validator ::
           module()
-          | (token :: String.t() -> Urchin.Auth.TokenValidator.result())
-          | (token :: String.t(), auth :: t() -> Urchin.Auth.TokenValidator.result())
+          | (token :: String.t(), auth :: t(), conn :: term() ->
+               Urchin.Auth.TokenValidator.result())
 
   @type kind :: :missing | :invalid_token | :insufficient_scope | :invalid_request | :server_error
 
@@ -95,14 +100,15 @@ defmodule Urchin.Auth do
           resource_name: String.t() | nil,
           jwks_uri: String.t() | nil,
           resource_documentation: String.t() | nil,
-          authorization_servers: [String.t()],
-          token_validator: {:module, module()} | {:fun, fun(), 1 | 2},
+          authorization_servers: authorization_servers(),
+          token_validator: {:module, module()} | {:fun, fun()},
           scopes_supported: [String.t()] | nil,
           required_scopes: [String.t()] | (term() -> [String.t()]),
           well_known_paths: [String.t()],
           metadata: map(),
           audience_validation: :auto | :skip,
-          bearer_methods_supported: [String.t()]
+          bearer_methods_supported: [String.t()],
+          allow_insecure_authorization_servers: boolean()
         }
 
   ## Construction
@@ -119,13 +125,12 @@ defmodule Urchin.Auth do
     resource = require_opt!(opts, :resource)
     resource_uri = parse_resource!(resource)
 
-    servers = require_opt!(opts, :authorization_servers) |> List.wrap()
-
-    if servers == [],
-      do: raise(ArgumentError, ":authorization_servers must list at least one issuer")
-
     allow_insecure = Keyword.get(opts, :allow_insecure_authorization_servers, false)
-    Enum.each(servers, &validate_issuer!(&1, allow_insecure))
+
+    servers =
+      opts
+      |> require_opt!(:authorization_servers)
+      |> resolve_authorization_servers!(allow_insecure)
 
     validator = opts |> require_opt!(:token_validator) |> resolve_validator!()
     suffix = path_suffix(resource_uri)
@@ -144,7 +149,8 @@ defmodule Urchin.Auth do
       well_known_paths: Enum.uniq([@well_known <> suffix, @well_known]),
       metadata: Keyword.get(opts, :metadata, %{}),
       audience_validation: Keyword.get(opts, :audience_validation, :auto),
-      bearer_methods_supported: Keyword.get(opts, :bearer_methods_supported, ["header"])
+      bearer_methods_supported: Keyword.get(opts, :bearer_methods_supported, ["header"]),
+      allow_insecure_authorization_servers: allow_insecure
     }
   end
 
@@ -175,11 +181,11 @@ defmodule Urchin.Auth do
   ## Metadata (RFC 9728 discovery)
 
   @doc "Returns the RFC 9728 Protected Resource Metadata document as a JSON-encodable map."
-  @spec metadata_document(t()) :: map()
-  def metadata_document(%__MODULE__{} = auth) do
+  @spec metadata_document(t(), term()) :: map()
+  def metadata_document(%__MODULE__{} = auth, conn) do
     %{
       resource: auth.resource,
-      authorization_servers: auth.authorization_servers,
+      authorization_servers: authorization_servers(auth, conn),
       bearer_methods_supported: auth.bearer_methods_supported
     }
     |> put_optional(:scopes_supported, auth.scopes_supported)
@@ -189,13 +195,23 @@ defmodule Urchin.Auth do
     |> Map.merge(auth.metadata)
   end
 
+  @doc "Resolves the configured Authorization Server issuer URLs for the request."
+  @spec authorization_servers(t(), term()) :: [String.t()]
+  def authorization_servers(%__MODULE__{authorization_servers: fun} = auth, conn)
+      when is_function(fun, 1) do
+    fun.(conn)
+    |> normalize_authorization_servers!(auth.allow_insecure_authorization_servers)
+  end
+
+  def authorization_servers(%__MODULE__{authorization_servers: servers}, _conn), do: servers
+
   @doc "The absolute URL of the Protected Resource Metadata document (for `resource_metadata`)."
-  @spec resource_metadata_url(t()) :: String.t()
-  def resource_metadata_url(%__MODULE__{resource_metadata_url: url}), do: url
+  @spec resource_metadata_url(t(), term()) :: String.t()
+  def resource_metadata_url(%__MODULE__{resource_metadata_url: url}, _conn), do: url
 
   @doc "The request paths at which the metadata document is served (canonical + root)."
-  @spec well_known_paths(t()) :: [String.t()]
-  def well_known_paths(%__MODULE__{well_known_paths: paths}), do: paths
+  @spec well_known_paths(t(), term()) :: [String.t()]
+  def well_known_paths(%__MODULE__{well_known_paths: paths}, _conn), do: paths
 
   ## Request-time helpers
 
@@ -212,15 +228,15 @@ defmodule Urchin.Auth do
 
   Runs the validator, then enforces token expiry (when exposed), audience binding
   (RFC 8707) and `required_scopes`. Returns `{:ok, claims}` or `{:error, kind, message}`,
-  where `kind` selects the challenge (see `challenge/4`).
+  where `kind` selects the challenge (see `challenge/5`).
   """
-  @spec verify_token(t(), String.t() | nil, [String.t()]) ::
+  @spec verify_token(t(), String.t() | nil, [String.t()], term()) ::
           {:ok, Claims.t()} | {:error, kind(), String.t()}
-  def verify_token(_auth, nil, _required), do: {:error, :missing, "Authorization required"}
-  def verify_token(_auth, "", _required), do: {:error, :missing, "Authorization required"}
+  def verify_token(_auth, nil, _required, _conn), do: {:error, :missing, "Authorization required"}
+  def verify_token(_auth, "", _required, _conn), do: {:error, :missing, "Authorization required"}
 
-  def verify_token(%__MODULE__{} = auth, token, required_scopes) when is_binary(token) do
-    with {:ok, claims} <- run_validator(auth, token),
+  def verify_token(%__MODULE__{} = auth, token, required_scopes, conn) when is_binary(token) do
+    with {:ok, claims} <- run_validator(auth, token, conn),
          :ok <- check_expiry(claims),
          :ok <- check_audience(auth, claims),
          :ok <- check_scopes(claims, required_scopes) do
@@ -229,23 +245,23 @@ defmodule Urchin.Auth do
   end
 
   @doc """
-  Builds the HTTP response for a failed `verify_token/3`.
+  Builds the HTTP response for a failed `verify_token/4`.
 
   Returns `{status, www_authenticate, body}` where `www_authenticate` is the header
   string (or `nil` for 500) and `body` is the OAuth 2.0 error object.
   """
-  @spec challenge(t(), kind(), String.t(), [String.t()]) ::
+  @spec challenge(t(), kind(), String.t(), [String.t()], term()) ::
           {100..599, String.t() | nil, map()}
-  def challenge(%__MODULE__{} = auth, kind, message, required_scopes) do
-    {status_for(kind), www_authenticate(auth, kind, message, required_scopes),
+  def challenge(%__MODULE__{} = auth, kind, message, required_scopes, conn) do
+    {status_for(kind), www_authenticate(auth, kind, message, required_scopes, conn),
      %{error: body_error_code(kind), error_description: message}}
   end
 
   ## Validation pipeline
 
-  defp run_validator(auth, token) do
+  defp run_validator(auth, token, conn) do
     auth.token_validator
-    |> invoke(token, auth)
+    |> invoke(token, auth, conn)
     |> normalize_result()
   rescue
     error ->
@@ -258,9 +274,8 @@ defmodule Urchin.Auth do
       {:error, :server_error, "Internal Server Error"}
   end
 
-  defp invoke({:module, mod}, token, auth), do: mod.validate(token, auth)
-  defp invoke({:fun, fun, 1}, token, _auth), do: fun.(token)
-  defp invoke({:fun, fun, 2}, token, auth), do: fun.(token, auth)
+  defp invoke({:module, mod}, token, auth, conn), do: mod.validate(token, auth, conn)
+  defp invoke({:fun, fun}, token, auth, conn), do: fun.(token, auth, conn)
 
   defp normalize_result({:ok, %Claims{} = claims}), do: {:ok, claims}
   defp normalize_result({:ok, map}) when is_map(map), do: {:ok, Claims.from_map(map)}
@@ -340,21 +355,23 @@ defmodule Urchin.Auth do
 
   # No-credentials 401: per RFC 6750 §3.1 (and the MCP §6.1 example) the challenge omits
   # `error` when the request carried no authentication information.
-  defp www_authenticate(auth, :missing, _message, scopes) do
-    build_bearer([{"resource_metadata", auth.resource_metadata_url}] ++ scope_param(scopes))
+  defp www_authenticate(auth, :missing, _message, scopes, conn) do
+    build_bearer(
+      [{"resource_metadata", resource_metadata_url(auth, conn)}] ++ scope_param(scopes)
+    )
   end
 
-  defp www_authenticate(auth, :invalid_token, message, scopes) do
+  defp www_authenticate(auth, :invalid_token, message, scopes, conn) do
     build_bearer(
       [
         {"error", "invalid_token"},
         {"error_description", message},
-        {"resource_metadata", auth.resource_metadata_url}
+        {"resource_metadata", resource_metadata_url(auth, conn)}
       ] ++ scope_param(scopes)
     )
   end
 
-  defp www_authenticate(auth, :insufficient_scope, message, scopes) do
+  defp www_authenticate(auth, :insufficient_scope, message, scopes, conn) do
     # The 403 SHOULD advertise the scopes needed for the request; if none were resolved for
     # this request (e.g. a validator-driven insufficient_scope), fall back to scopes_supported.
     hint = if scopes == [], do: auth.scopes_supported || [], else: scopes
@@ -363,22 +380,22 @@ defmodule Urchin.Auth do
       [{"error", "insufficient_scope"}] ++
         scope_param(hint) ++
         [
-          {"resource_metadata", auth.resource_metadata_url},
+          {"resource_metadata", resource_metadata_url(auth, conn)},
           {"error_description", message}
         ]
     )
   end
 
-  defp www_authenticate(auth, :invalid_request, message, _scopes) do
+  defp www_authenticate(auth, :invalid_request, message, _scopes, conn) do
     build_bearer([
       {"error", "invalid_request"},
       {"error_description", message},
-      {"resource_metadata", auth.resource_metadata_url}
+      {"resource_metadata", resource_metadata_url(auth, conn)}
     ])
   end
 
   # Server errors are not the client's fault and carry no discovery hint.
-  defp www_authenticate(_auth, :server_error, _message, _scopes), do: nil
+  defp www_authenticate(_auth, :server_error, _message, _scopes, _conn), do: nil
 
   defp scope_param([]), do: []
   defp scope_param(scopes), do: [{"scope", Enum.join(scopes, " ")}]
@@ -454,21 +471,36 @@ defmodule Urchin.Auth do
   defp validate_issuer!(other, _allow_insecure),
     do: raise(ArgumentError, "authorization server must be a string, got: #{inspect(other)}")
 
+  defp resolve_authorization_servers!(fun, _allow_insecure) when is_function(fun, 1), do: fun
+
+  defp resolve_authorization_servers!(servers, allow_insecure) do
+    normalize_authorization_servers!(servers, allow_insecure)
+  end
+
+  defp normalize_authorization_servers!(servers, allow_insecure) do
+    servers = List.wrap(servers)
+
+    if servers == [],
+      do: raise(ArgumentError, ":authorization_servers must list at least one issuer")
+
+    Enum.each(servers, &validate_issuer!(&1, allow_insecure))
+    servers
+  end
+
   defp resolve_validator!(mod) when is_atom(mod) and not is_nil(mod) do
-    if Code.ensure_loaded?(mod) and function_exported?(mod, :validate, 2) do
+    if Code.ensure_loaded?(mod) and function_exported?(mod, :validate, 3) do
       {:module, mod}
     else
       raise ArgumentError,
-            ":token_validator module must implement validate/2, got: #{inspect(mod)}"
+            ":token_validator module must implement validate/3, got: #{inspect(mod)}"
     end
   end
 
-  defp resolve_validator!(fun) when is_function(fun, 1), do: {:fun, fun, 1}
-  defp resolve_validator!(fun) when is_function(fun, 2), do: {:fun, fun, 2}
+  defp resolve_validator!(fun) when is_function(fun, 3), do: {:fun, fun}
 
   defp resolve_validator!(other) do
     raise ArgumentError,
-          ":token_validator must be a module or a 1-/2-arity function, got: #{inspect(other)}"
+          ":token_validator must be a module or a 3-arity function, got: #{inspect(other)}"
   end
 
   # RFC 9728 §3.1 path insertion: the well-known suffix mirrors the resource path.

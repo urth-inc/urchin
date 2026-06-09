@@ -39,6 +39,30 @@ defmodule Urchin.Auth.MetadataTest do
     assert Jason.decode!(conn.resp_body)["resource"] == "https://mcp.example.com/mcp"
   end
 
+  test "resolves authorization servers from the request connection" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        authorization_servers: fn conn ->
+          realm = URI.decode_query(conn.query_string)["realm"]
+          ["https://auth.example.com/realms/#{realm}"]
+        end,
+        token_validator: Urchin.Test.RejectValidator
+      )
+
+    config = Metadata.init(auth: auth)
+
+    conn =
+      conn(:get, "/.well-known/oauth-protected-resource/mcp?realm=tenant-a")
+      |> Metadata.call(config)
+
+    assert conn.status == 200
+
+    assert Jason.decode!(conn.resp_body)["authorization_servers"] == [
+             "https://auth.example.com/realms/tenant-a"
+           ]
+  end
+
   test "responds to the metadata document with permissive CORS" do
     conn = request(:get, "/.well-known/oauth-protected-resource/mcp")
     assert ["*"] = get_resp_header(conn, "access-control-allow-origin")

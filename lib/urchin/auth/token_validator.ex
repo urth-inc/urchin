@@ -10,11 +10,11 @@ defmodule Urchin.Auth.TokenValidator do
 
   A validator is supplied to `Urchin.Auth.new!/1` as `:token_validator` and may be:
 
-    * a module implementing this behaviour (`c:validate/2`), or
-    * a 1-arity function `fn token -> result end`, or
-    * a 2-arity function `fn token, auth -> result end`.
+    * a module implementing this behaviour (`c:validate/3`), or
+    * a 3-arity function `fn token, auth, conn -> result end`.
 
-  `validate/2` must return one of:
+  `validate/3` receives the access token, the `Urchin.Auth` configuration and the current
+  request context (`Plug.Conn` in the HTTP transport). It must return one of:
 
     * `{:ok, Urchin.Auth.Claims.t()}` — the token is valid; the claims flow to handlers
       as `ctx.auth`.
@@ -38,7 +38,7 @@ defmodule Urchin.Auth.TokenValidator do
         @behaviour Urchin.Auth.TokenValidator
 
         @impl true
-        def validate(token, _auth) do
+        def validate(token, _auth, _conn) do
           case verify_signature_and_decode(token) do
             {:ok, payload} -> {:ok, Urchin.Auth.Claims.from_map(payload)}
             :error -> {:error, :invalid_token}
@@ -54,5 +54,5 @@ defmodule Urchin.Auth.TokenValidator do
   @type kind :: :invalid_token | :insufficient_scope | :invalid_request | :server_error
   @type result :: {:ok, Claims.t()} | {:error, reason()} | {:error, kind(), String.t()}
 
-  @callback validate(token :: String.t(), auth :: Auth.t()) :: result()
+  @callback validate(token :: String.t(), auth :: Auth.t(), conn :: term()) :: result()
 end

@@ -37,6 +37,9 @@ details and how to adapt.
 - `:sse_buffer_limit` transport option (default `nil`, preserving the session's internal
   default of `100`) forwarding the per-session GET-stream replay buffer size to the session;
   previously only configurable on `Urchin.Session` directly.
+- Per-request OAuth authorization server resolution: `authorization_servers` may now be a
+  `fn conn -> [issuer] end` resolver, allowing tenant/realm-aware Protected Resource
+  Metadata while keeping token audience binding on the configured resource.
 
 ### Changed
 
@@ -83,6 +86,9 @@ breaking relative to `0.2.0`.
   levels (`invalid_params` otherwise), an exported `set_log_level/2` still runs as a hook, and
   the session level is updated only after the hook succeeds. Servers that do not advertise
   `logging` return `method_not_found`.
+- `Urchin.Auth.TokenValidator` now uses `validate/3` (`token`, `auth`, `conn`) and
+  3-arity validator functions. The request connection is passed through so validators can
+  select tenant-specific issuers, JWKS, introspection endpoints or policy.
 
 ### Fixed
 
