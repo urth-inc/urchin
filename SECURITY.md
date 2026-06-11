@@ -11,9 +11,10 @@ and does not protect against, and what you must add before exposing a server pub
   localhost are allowed; configure `:allowed_origins` for browser clients.
 - **Cryptographically random session ids** (`MCP-Session-Id`), visible-ASCII only.
 - **OAuth 2.1 resource-server authorization** (optional, off by default). When enabled, it
-  validates bearer tokens on every request, enforces RFC 8707 audience binding (fail-closed
-  for tokens with no audience), checks scopes, and serves RFC 9728 discovery. See
-  `Urchin.Auth`. The authorization server itself is external and out of scope.
+  extracts bearer tokens on every request, delegates the authorization decision to your
+  configured `Urchin.Auth.Authorizer`, and serves RFC 9728 discovery. The authorizer must
+  verify token validity, expiry, issuer, audience/resource binding, scopes and tenant
+  policy. The authorization server itself is external and out of scope.
 - **Error redaction.** Unexpected exceptions and malformed handler returns are logged in
   full and replaced with a generic message before reaching clients (`:expose_internal_errors`,
   default `false`, opts into the detail for development). Deliberate errors — `Urchin.Error`

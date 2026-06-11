@@ -66,6 +66,21 @@ defmodule Urchin.Auth do
   alias Urchin.Auth.Claims
 
   @well_known "/.well-known/oauth-protected-resource"
+  @allowed_options [
+    :resource,
+    :authorization_servers,
+    :authorizer,
+    :scopes_supported,
+    :required_scopes,
+    :bearer_methods_supported,
+    :resource_name,
+    :jwks_uri,
+    :resource_documentation,
+    :resource_metadata_url,
+    :metadata,
+    :allow_insecure_authorization_servers
+  ]
+  @deprecated_options [:token_validator, :audience_validation]
 
   defstruct [
     :resource,
@@ -122,6 +137,8 @@ defmodule Urchin.Auth do
   def new!(opts) when is_map(opts), do: new!(Map.to_list(opts))
 
   def new!(opts) when is_list(opts) do
+    validate_options!(opts)
+
     resource = require_opt!(opts, :resource)
     resource_uri = parse_resource!(resource)
 
@@ -136,6 +153,7 @@ defmodule Urchin.Auth do
     suffix = path_suffix(resource_uri)
     resource_metadata_url = resolve_resource_metadata_url!(opts, resource_uri, suffix)
     metadata = opts |> Keyword.get(:metadata, %{}) |> validate_metadata!()
+    required_scopes = opts |> Keyword.get(:required_scopes, []) |> resolve_required_scopes!()
 
     %__MODULE__{
       resource: resource,
@@ -147,7 +165,7 @@ defmodule Urchin.Auth do
       authorization_servers: servers,
       authorizer: authorizer,
       scopes_supported: Keyword.get(opts, :scopes_supported),
-      required_scopes: Keyword.get(opts, :required_scopes, []),
+      required_scopes: required_scopes,
       well_known_paths: Enum.uniq([@well_known <> suffix, @well_known]),
       metadata: metadata,
       bearer_methods_supported: Keyword.get(opts, :bearer_methods_supported, ["header"]),
@@ -225,7 +243,7 @@ defmodule Urchin.Auth do
   @doc "Resolves the scopes required for a request (static list or `fn conn -> [...] end`)."
   @spec required_scopes(t(), term()) :: [String.t()]
   def required_scopes(%__MODULE__{required_scopes: fun}, conn) when is_function(fun, 1) do
-    fun.(conn) |> List.wrap()
+    fun.(conn) |> normalize_scopes!(":required_scopes resolver")
   end
 
   def required_scopes(%__MODULE__{required_scopes: list}, _conn) when is_list(list), do: list
@@ -242,6 +260,7 @@ defmodule Urchin.Auth do
     auth.authorizer
     |> invoke_authorizer(blank_to_nil(token), auth, conn)
     |> normalize_result()
+    |> warn_uncovered_resource(auth)
   rescue
     error ->
       # A crashing authorizer must not leak internals or 200 a bad token; surface a 500.
@@ -272,6 +291,7 @@ defmodule Urchin.Auth do
   defp invoke_authorizer({:fun, fun}, token, auth, conn), do: fun.(token, auth, conn)
 
   defp normalize_result({:ok, %Claims{} = claims}), do: {:ok, claims}
+  defp normalize_result({:ok, map}) when is_map(map), do: {:ok, Claims.from_map(map)}
 
   defp normalize_result({:error, kind, message})
        when kind in [
@@ -317,6 +337,20 @@ defmodule Urchin.Auth do
   end
 
   defp map_reason(_other), do: {:error, :invalid_token, "Invalid access token"}
+
+  defp warn_uncovered_resource({:ok, %Claims{audience: []} = claims}, _auth), do: {:ok, claims}
+
+  defp warn_uncovered_resource({:ok, %Claims{} = claims}, auth) do
+    unless Claims.covers_resource?(claims, auth.resource) do
+      Logger.warning(
+        "Urchin.Auth authorizer returned claims whose audience does not cover #{auth.resource}"
+      )
+    end
+
+    {:ok, claims}
+  end
+
+  defp warn_uncovered_resource(other, _auth), do: other
 
   ## WWW-Authenticate building
 
@@ -474,6 +508,24 @@ defmodule Urchin.Auth do
           ":authorizer must be a module or a 3-arity function, got: #{inspect(other)}"
   end
 
+  defp resolve_required_scopes!(fun) when is_function(fun, 1), do: fun
+
+  defp resolve_required_scopes!(fun) when is_function(fun) do
+    raise ArgumentError, ":required_scopes must be a list or a 1-arity function"
+  end
+
+  defp resolve_required_scopes!(scopes), do: normalize_scopes!(scopes, ":required_scopes")
+
+  defp normalize_scopes!(scopes, name) do
+    scopes = List.wrap(scopes)
+
+    if Enum.all?(scopes, &is_binary/1) do
+      scopes
+    else
+      raise ArgumentError, "#{name} must contain only strings, got: #{inspect(scopes)}"
+    end
+  end
+
   defp resolve_resource_metadata_url!(opts, resource_uri, suffix) do
     case Keyword.fetch(opts, :resource_metadata_url) do
       {:ok, fun} when is_function(fun, 1) ->
@@ -545,6 +597,29 @@ defmodule Urchin.Auth do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(token), do: token
+
+  defp validate_options!(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError, "Urchin.Auth options must be a keyword list or an atom-keyed map"
+    end
+
+    case Enum.find(Keyword.keys(opts), &(&1 in @deprecated_options)) do
+      nil ->
+        :ok
+
+      :token_validator ->
+        raise ArgumentError, ":token_validator was removed; use :authorizer instead"
+
+      :audience_validation ->
+        raise ArgumentError,
+              ":audience_validation was removed; enforce audience/resource binding in :authorizer"
+    end
+
+    case Enum.find(Keyword.keys(opts), &(&1 not in @allowed_options)) do
+      nil -> :ok
+      key -> raise ArgumentError, "unknown Urchin.Auth option #{inspect(key)}"
+    end
+  end
 
   defp require_opt!(opts, key) do
     case Keyword.fetch(opts, key) do

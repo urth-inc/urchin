@@ -70,7 +70,7 @@ defmodule Keycloak.Authorizer do
   end
 
   defp ensure_audience(%Urchin.Auth.Claims{audience: audiences}, resource) do
-    if resource in audiences,
+    if Urchin.Auth.Claims.covers_resource?(%Urchin.Auth.Claims{audience: audiences}, resource),
       do: :ok,
       else: {:error, :invalid_token, "Token audience is invalid"}
   end

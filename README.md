@@ -234,9 +234,20 @@ defmodule Demo.Authorizer do
   def authorize(token, auth, conn) do
     required = Urchin.Auth.required_scopes(auth, conn)
 
-    case verify_jwt_and_policy(token, auth.resource, required, conn) do
-      {:ok, payload} -> {:ok, Urchin.Auth.Claims.from_map(payload)}
-      {:error, :insufficient_scope} -> {:error, :insufficient_scope, "Insufficient scope"}
+    with {:ok, payload} <- verify_jwt(token, conn) do
+      claims = Urchin.Auth.Claims.from_map(payload)
+
+      cond do
+        not Urchin.Auth.Claims.covers_resource?(claims, auth.resource) ->
+          {:error, :invalid_token, "Token audience is invalid"}
+
+        not Urchin.Auth.Claims.has_scopes?(claims, required) ->
+          {:error, :insufficient_scope, "Insufficient scope"}
+
+        true ->
+          {:ok, claims}
+      end
+    else
       :error -> {:error, :invalid_token}
     end
   end
@@ -257,6 +268,7 @@ For realm-aware deployments, `authorization_servers` may also be `fn conn -> [is
 the metadata endpoint resolves it per request. If tenant context is carried in a path segment
 or query string, configure `resource_metadata_url: fn conn -> url end` so the `401`
 challenge points clients to a metadata URL that preserves that context.
+Validate any tenant identifier before using it to build issuer or metadata URLs.
 
 The standalone runner serves the discovery document for you, at
 `https://mcp.example.com/.well-known/oauth-protected-resource/mcp`:
@@ -278,6 +290,9 @@ Unauthenticated requests get a `401` with a `WWW-Authenticate: Bearer ..., resou
 challenge so clients can discover the authorization server. Authorization failures are mapped
 from the authorizer's `{:error, kind, message}` result. The validated claims are available to
 handlers as `ctx.auth` for per-tool decisions:
+
+`required_scopes` is passed to the authorizer and used as a challenge hint. The authorizer is
+responsible for enforcing those request-level scopes.
 
 Declare required scopes on the tool and they are enforced before the handler runs (this
 fails closed: a request with no authorization is denied):
@@ -387,7 +402,7 @@ excepted); a `tools/call` handler's `{:error, binary}` is returned as an `isErro
 | Logging | `logging/setLevel`, `notifications/message` |
 | Utilities | `ping`, `notifications/cancelled`, `notifications/progress`, pagination |
 | Server → client | `sampling/createMessage`, `elicitation/create`, `roots/list` |
-| Authorization | OAuth 2.1 resource server: RFC 9728 metadata discovery, `WWW-Authenticate` challenges, RFC 8707 audience binding (optional) |
+| Authorization | OAuth 2.1 resource server: RFC 9728 metadata discovery, `WWW-Authenticate` challenges, request-aware authorizer callbacks |
 
 The transport implements: a single endpoint serving POST/GET/DELETE, the
 JSON-vs-SSE response decision, `202 Accepted` for notifications and responses,

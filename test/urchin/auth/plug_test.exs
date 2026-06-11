@@ -1,6 +1,7 @@
 defmodule Urchin.Auth.PlugTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
   import Plug.Test
   import Plug.Conn
 
@@ -112,6 +113,14 @@ defmodule Urchin.Auth.PlugTest do
     assert header =~ "resource_metadata="
   end
 
+  test "a token with the wrong audience halts with a 401 invalid_token challenge" do
+    conn = run("wrong-aud")
+    assert conn.status == 401
+    [header] = get_resp_header(conn, "www-authenticate")
+    assert header =~ ~s(error="invalid_token")
+    assert header =~ ~s(error_description="Token audience is invalid")
+  end
+
   test "a token lacking required scopes halts with a 403 insufficient_scope" do
     conn = run("low")
     assert conn.status == 403
@@ -128,6 +137,35 @@ defmodule Urchin.Auth.PlugTest do
       |> AuthPlug.call(@config)
 
     assert conn.status == 401
+    [header] = get_resp_header(conn, "www-authenticate")
+    refute header =~ "error="
+  end
+
+  test "server_error halts with a 500 and no discovery challenge" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        authorization_servers: ["https://auth.example.com"],
+        authorizer: fn _, _, _ -> raise "boom" end
+      )
+
+    config = AuthPlug.init(auth: auth)
+
+    log =
+      capture_log(fn ->
+        conn =
+          conn(:post, "/mcp", "")
+          |> put_req_header("authorization", "Bearer token")
+          |> AuthPlug.call(config)
+
+        send(self(), {:conn, conn})
+      end)
+
+    assert log =~ "authorizer raised"
+    assert_received {:conn, conn}
+    assert conn.status == 500
+    assert get_resp_header(conn, "www-authenticate") == []
+    assert Jason.decode!(conn.resp_body)["error"] == "server_error"
   end
 
   test "authenticate/2 with nil passes through untouched" do

@@ -1,8 +1,9 @@
 # Run with: mix run examples/authenticated_server.exs
 #
-# This example turns on OAuth 2.1 authorization. The token validator below is a
+# This example turns on OAuth 2.1 authorization. The authorizer below is a
 # DEV-ONLY stub that accepts two hard-coded tokens; a real server would verify a JWT
-# signature or call an introspection endpoint instead.
+# signature or call an introspection endpoint, then enforce expiry, issuer, audience and
+# scopes.
 #
 # 1. Discover the authorization server (RFC 9728, no token needed):
 #
@@ -78,8 +79,7 @@ defmodule Notes.Authorizer do
 
   alias Urchin.Auth.Claims
 
-  # Real tokens are audience-bound (RFC 8707); these stubs carry the matching audience so
-  # the default :auto audience check passes.
+  # Real tokens are audience-bound (RFC 8707); the authorizer must enforce that binding.
   @aud ["http://localhost:4000/mcp"]
   @tokens %{
     "reader-token" => %Claims{subject: "reader", scopes: ["notes:read"], audience: @aud},
@@ -102,7 +102,9 @@ defmodule Notes.Authorizer do
   end
 
   defp ensure_audience(%Claims{audience: audiences}, resource) do
-    if resource in audiences, do: :ok, else: :invalid_audience
+    if Claims.covers_resource?(%Claims{audience: audiences}, resource),
+      do: :ok,
+      else: :invalid_audience
   end
 
   defp ensure_scopes(%Claims{} = claims, required) do

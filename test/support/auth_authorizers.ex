@@ -34,11 +34,23 @@ defmodule Urchin.Test.ScopeAuthorizer do
     authorize_claims(%Claims{subject: "bob", scopes: ["other"], audience: @aud}, auth, conn)
   end
 
+  def authorize("wrong-aud", auth, conn) do
+    authorize_claims(
+      %Claims{
+        subject: "mallory",
+        scopes: ["files:read"],
+        audience: ["https://other.example.com"]
+      },
+      auth,
+      conn
+    )
+  end
+
   def authorize(_token, _auth, _conn), do: {:error, :invalid_token}
 
   defp authorize_claims(%Claims{} = claims, auth, conn) do
     cond do
-      auth.resource not in claims.audience ->
+      not Claims.covers_resource?(claims, auth.resource) ->
         {:error, :invalid_token, "Token audience is invalid"}
 
       not Claims.has_scopes?(claims, Urchin.Auth.required_scopes(auth, conn)) ->

@@ -1,6 +1,8 @@
 defmodule Urchin.AuthTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Urchin.Auth
   alias Urchin.Auth.Claims
 
@@ -92,6 +94,30 @@ defmodule Urchin.AuthTest do
         build(metadata: %{"authorization_servers" => ["https://evil.example.com"]})
       end
     end
+
+    test "rejects removed and unknown options" do
+      assert_raise ArgumentError, ~r/:token_validator was removed/, fn ->
+        build(token_validator: fn _ -> {:ok, %{}} end)
+      end
+
+      assert_raise ArgumentError, ~r/:audience_validation was removed/, fn ->
+        build(audience_validation: :skip)
+      end
+
+      assert_raise ArgumentError, ~r/unknown Urchin.Auth option :extra/, fn ->
+        build(extra: true)
+      end
+    end
+
+    test "validates required_scopes shape at construction" do
+      assert_raise ArgumentError, ~r/:required_scopes must contain only strings/, fn ->
+        build(required_scopes: ["files:read", :bad])
+      end
+
+      assert_raise ArgumentError, ~r/:required_scopes must be a list or a 1-arity function/, fn ->
+        build(required_scopes: fn -> ["files:read"] end)
+      end
+    end
   end
 
   describe "coerce!/1" do
@@ -172,6 +198,21 @@ defmodule Urchin.AuthTest do
 
       assert_raise ArgumentError, ~r/query/, fn ->
         Auth.metadata_document(query, @conn)
+      end
+    end
+  end
+
+  describe "request-time helpers" do
+    test "resolves required_scopes per request" do
+      auth = build(required_scopes: fn conn -> ["tenant:#{conn.realm}"] end)
+      assert Auth.required_scopes(auth, %{realm: "tenant-a"}) == ["tenant:tenant-a"]
+    end
+
+    test "validates dynamic required_scopes when resolved" do
+      auth = build(required_scopes: fn _conn -> ["files:read", :bad] end)
+
+      assert_raise ArgumentError, ~r/:required_scopes resolver must contain only strings/, fn ->
+        Auth.required_scopes(auth, @conn)
       end
     end
   end
@@ -270,6 +311,31 @@ defmodule Urchin.AuthTest do
       assert {:error, :invalid_token, _} = Auth.authorize(auth, "tok", @conn)
     end
 
+    test "authorizer reason normalization is fail closed" do
+      cases = [
+        {{:error, :missing}, {:error, :missing, "Authorization required"}},
+        {{:error, :expired}, {:error, :invalid_token, "Token has expired"}},
+        {{:error, :invalid_audience}, {:error, :invalid_token, "Token audience is invalid"}},
+        {{:error, {:invalid_audience, "wrong"}},
+         {:error, :invalid_token, "Token audience is invalid"}},
+        {{:error, :insufficient_scope}, {:error, :insufficient_scope, "Insufficient scope"}},
+        {{:error, {:insufficient_scope, ["a"]}},
+         {:error, :insufficient_scope, "Insufficient scope"}},
+        {{:error, :invalid_request}, {:error, :invalid_request, "Invalid request"}},
+        {{:error, :invalid_token}, {:error, :invalid_token, "Invalid access token"}},
+        {{:error, :invalid}, {:error, :invalid_token, "Invalid access token"}},
+        {{:error, :unauthorized}, {:error, :invalid_token, "Invalid access token"}},
+        {{:error, :unknown_reason}, {:error, :invalid_token, "Invalid access token"}},
+        {{:error, "internal: jwks fetch failed"},
+         {:error, :invalid_token, "Invalid access token"}}
+      ]
+
+      for {returned, expected} <- cases do
+        auth = build(authorizer: fn _, _, _ -> returned end)
+        assert Auth.authorize(auth, "tok", @conn) == expected
+      end
+    end
+
     test "a bare binary rejection reason is not reflected to the client" do
       auth = build(authorizer: fn _, _, _ -> {:error, "internal: jwks fetch failed"} end)
 
@@ -294,12 +360,55 @@ defmodule Urchin.AuthTest do
           end
         )
 
-      assert {:ok, %Claims{subject: "u1"}} = Auth.authorize(auth, "tok", @conn)
+      log =
+        capture_log(fn ->
+          assert {:ok, %Claims{subject: "u1"}} = Auth.authorize(auth, "tok", @conn)
+        end)
+
+      assert log =~ "audience does not cover"
+    end
+
+    test "a plain map success is normalized via Claims.from_map/1" do
+      payload = %{"sub" => "u9", "scope" => "x y", "aud" => "https://mcp.example.com/mcp"}
+      auth = build(authorizer: fn _, _, _ -> {:ok, payload} end)
+
+      assert {:ok, %Claims{subject: "u9", scopes: ["x", "y"]}} =
+               Auth.authorize(auth, "tok", @conn)
+    end
+
+    test "unexpected authorizer return shapes produce server_error" do
+      for returned <- [:ok, nil, {:ok, nil}] do
+        auth = build(authorizer: fn _, _, _ -> returned end)
+
+        assert capture_log(fn ->
+                 assert {:error, :server_error, "Internal Server Error"} =
+                          Auth.authorize(auth, "tok", @conn)
+               end) =~ "unexpected value"
+      end
     end
 
     test "an authorizer that raises produces a server_error" do
       auth = build(authorizer: fn _, _, _ -> raise "boom" end)
-      assert {:error, :server_error, _} = Auth.authorize(auth, "tok", @conn)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :server_error, "Internal Server Error"} =
+                   Auth.authorize(auth, "tok", @conn)
+        end)
+
+      assert log =~ "authorizer raised"
+      assert log =~ "boom"
+    end
+
+    test "an authorizer that throws or exits produces a server_error" do
+      for fun <- [fn -> throw(:boom) end, fn -> exit(:boom) end] do
+        auth = build(authorizer: fn _, _, _ -> fun.() end)
+
+        assert capture_log(fn ->
+                 assert {:error, :server_error, "Internal Server Error"} =
+                          Auth.authorize(auth, "tok", @conn)
+               end) =~ "authorizer threw"
+      end
     end
 
     test "a {:error, kind, message} tuple passes through" do
@@ -356,6 +465,13 @@ defmodule Urchin.AuthTest do
     test "server_error -> 500 with no challenge", %{auth: auth} do
       assert {500, nil, %{error: "server_error"}} =
                Auth.challenge(auth, :server_error, "boom", [], @conn)
+    end
+
+    test "invalid_request -> 400 with a discovery challenge", %{auth: auth} do
+      {400, header, body} = Auth.challenge(auth, :invalid_request, "bad request", [], @conn)
+      assert header =~ ~s(error="invalid_request")
+      assert header =~ "resource_metadata="
+      assert body.error == "invalid_request"
     end
 
     test "escapes quotes in the error description", %{auth: auth} do
@@ -417,6 +533,31 @@ defmodule Urchin.AuthTest do
       assert Claims.has_scopes?(claims, ["a", "b"])
       refute Claims.has_scopes?(claims, ["a", "z"])
       assert Claims.has_scopes?(claims, [])
+    end
+
+    test "covers_resource?/2 accepts same-origin exact and parent-path audiences" do
+      resource = "https://mcp.example.com/mcp/tools"
+
+      assert Claims.covers_resource?(
+               %Claims{audience: ["https://mcp.example.com/mcp/tools"]},
+               resource
+             )
+
+      assert Claims.covers_resource?(%Claims{audience: ["https://mcp.example.com/mcp"]}, resource)
+      assert Claims.covers_resource?(%Claims{audience: ["https://mcp.example.com"]}, resource)
+
+      refute Claims.covers_resource?(
+               %Claims{audience: ["https://mcp.example.com/other"]},
+               resource
+             )
+
+      refute Claims.covers_resource?(
+               %Claims{audience: ["https://other.example.com/mcp"]},
+               resource
+             )
+
+      refute Claims.covers_resource?(%Claims{audience: []}, resource)
+      refute Claims.covers_resource?(nil, resource)
     end
   end
 end

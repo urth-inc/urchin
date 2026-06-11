@@ -39,7 +39,7 @@ details and how to adapt.
   previously only configurable on `Urchin.Session` directly.
 - Per-request OAuth authorization server resolution: `authorization_servers` may now be a
   `fn conn -> [issuer] end` resolver, allowing tenant/realm-aware Protected Resource
-  Metadata while keeping token audience binding on the configured resource.
+  Metadata. Token audience/resource binding is owned by the configured authorizer.
 - Per-request OAuth protected resource metadata URL resolution via `resource_metadata_url:
   fn conn -> url end`, allowing `WWW-Authenticate` challenges to preserve tenant context
   such as path or query data for the follow-up metadata request.
@@ -94,6 +94,14 @@ breaking relative to `0.2.0`.
   tokens, serves metadata, builds `WWW-Authenticate` challenges and passes claims to
   handlers; token validity, expiry, issuer, audience/resource binding, scopes and tenant
   policy are owned by the authorizer.
+- **BREAKING / SECURITY:** Urchin no longer performs SDK-level expiry, audience/resource
+  binding or request-scope enforcement after a token callback succeeds. Migrating
+  applications must implement those checks inside their authorizer (for example using
+  `Urchin.Auth.Claims.covers_resource?/2` and `has_scopes?/2`).
+- `Urchin.Auth.new!/1` now rejects removed options such as `:token_validator` and
+  `:audience_validation`, and rejects unknown options instead of silently ignoring them.
+- `Urchin.Auth.Authorizer` may return `{:ok, map}` for migration compatibility; Urchin
+  normalizes the map through `Urchin.Auth.Claims.from_map/1`.
 - Authorization server issuer URLs now reject query strings in addition to fragments.
 - Extra `:metadata` fields may no longer override fields owned by Urchin, such as
   `resource` and `authorization_servers`.

@@ -12,6 +12,11 @@ defmodule Urchin.Auth.Authorizer do
   transport). It owns the full decision: token validity, issuer, expiry, audience/resource
   binding, scopes and tenant-specific policy.
 
+  Always handle a `nil` token explicitly and return `{:error, :missing}` for a missing
+  bearer token. If an authorizer only matches binary tokens and crashes on `nil`, the OAuth
+  discovery bootstrap path becomes a `500` instead of the expected `401` challenge with
+  `resource_metadata`.
+
   The SDK uses the result only to either pass claims to handlers as `ctx.auth`, or to build
   the standard OAuth `WWW-Authenticate` challenge.
 
@@ -26,11 +31,11 @@ defmodule Urchin.Auth.Authorizer do
         def authorize(token, auth, conn) do
           with {:ok, payload} <- verify_signature_and_decode(token, conn),
                claims = Urchin.Auth.Claims.from_map(payload),
-               :ok <- ensure_audience(claims, auth.resource),
+               true <- Urchin.Auth.Claims.covers_resource?(claims, auth.resource),
                :ok <- ensure_scopes(claims, Urchin.Auth.required_scopes(auth, conn)) do
             {:ok, claims}
           else
-            :bad_audience -> {:error, :invalid_token, "Token audience is invalid"}
+            false -> {:error, :invalid_token, "Token audience is invalid"}
             :insufficient_scope -> {:error, :insufficient_scope, "Insufficient scope"}
             :error -> {:error, :invalid_token, "Invalid access token"}
           end
