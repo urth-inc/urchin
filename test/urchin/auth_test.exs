@@ -289,6 +289,25 @@ defmodule Urchin.AuthTest do
       assert {:error, :missing, _} = Auth.authorize(auth, "", @conn)
     end
 
+    test "a missing or blank token short-circuits without invoking the authorizer" do
+      auth =
+        build(
+          authorizer: fn token, _auth, _conn when is_binary(token) ->
+            {:ok, %Claims{subject: token, audience: ["https://mcp.example.com/mcp"]}}
+          end
+        )
+
+      # The authorizer has no nil clause and would FunctionClauseError if invoked; the SDK
+      # must resolve the missing token itself rather than escalate to a 500.
+      log =
+        capture_log(fn ->
+          assert {:error, :missing, "Authorization required"} = Auth.authorize(auth, nil, @conn)
+          assert {:error, :missing, "Authorization required"} = Auth.authorize(auth, "", @conn)
+        end)
+
+      refute log =~ "authorizer raised"
+    end
+
     test "valid token returns claims" do
       assert {:ok, %Claims{subject: "u1"}} = Auth.authorize(build([]), "tok", @conn)
     end
@@ -376,6 +395,27 @@ defmodule Urchin.AuthTest do
                Auth.authorize(auth, "tok", @conn)
     end
 
+    test "an atom-keyed map success is normalized via Claims.from_map/1" do
+      payload = %{sub: "u9", scope: "x y", aud: ["https://mcp.example.com/mcp"]}
+      auth = build(authorizer: fn _, _, _ -> {:ok, payload} end)
+
+      assert {:ok, %Claims{subject: "u9", scopes: ["x", "y"]}} =
+               Auth.authorize(auth, "tok", @conn)
+    end
+
+    test "a foreign struct success is a server_error, not a misleading authorizer crash" do
+      auth = build(authorizer: fn _, _, _ -> {:ok, %URI{host: "x"}} end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :server_error, "Internal Server Error"} =
+                   Auth.authorize(auth, "tok", @conn)
+        end)
+
+      assert log =~ "unexpected value"
+      refute log =~ "authorizer raised"
+    end
+
     test "unexpected authorizer return shapes produce server_error" do
       for returned <- [:ok, nil, {:ok, nil}] do
         auth = build(authorizer: fn _, _, _ -> returned end)
@@ -417,13 +457,13 @@ defmodule Urchin.AuthTest do
     end
   end
 
-  describe "challenge/5" do
+  describe "challenge/4" do
     setup do
       %{auth: build([])}
     end
 
     test "missing -> 401 with resource_metadata and no error param", %{auth: auth} do
-      {status, header, body} = Auth.challenge(auth, :missing, "Authorization required", [], @conn)
+      {status, header, body} = Auth.challenge(auth, :missing, "Authorization required", @conn)
       assert status == 401
 
       assert header =~
@@ -433,16 +473,14 @@ defmodule Urchin.AuthTest do
       assert body.error == "invalid_token"
     end
 
-    test "missing with required scopes adds a scope hint", %{auth: auth} do
-      {401, header, _} =
-        Auth.challenge(auth, :missing, "msg", ["files:read", "files:write"], @conn)
-
+    test "missing with required scopes adds a scope hint" do
+      auth = build(required_scopes: ["files:read", "files:write"])
+      {401, header, _} = Auth.challenge(auth, :missing, "msg", @conn)
       assert header =~ ~s(scope="files:read files:write")
     end
 
     test "invalid_token -> 401 with error and resource_metadata", %{auth: auth} do
-      {status, header, body} =
-        Auth.challenge(auth, :invalid_token, "Token has expired", [], @conn)
+      {status, header, body} = Auth.challenge(auth, :invalid_token, "Token has expired", @conn)
 
       assert status == 401
       assert header =~ ~s(error="invalid_token")
@@ -451,9 +489,9 @@ defmodule Urchin.AuthTest do
       assert body.error == "invalid_token"
     end
 
-    test "insufficient_scope -> 403 with scope and error", %{auth: auth} do
-      {status, header, body} =
-        Auth.challenge(auth, :insufficient_scope, "need more", ["a", "b"], @conn)
+    test "insufficient_scope -> 403 with scope and error" do
+      auth = build(required_scopes: ["a", "b"])
+      {status, header, body} = Auth.challenge(auth, :insufficient_scope, "need more", @conn)
 
       assert status == 403
       assert header =~ ~s(error="insufficient_scope")
@@ -464,24 +502,23 @@ defmodule Urchin.AuthTest do
 
     test "server_error -> 500 with no challenge", %{auth: auth} do
       assert {500, nil, %{error: "server_error"}} =
-               Auth.challenge(auth, :server_error, "boom", [], @conn)
+               Auth.challenge(auth, :server_error, "boom", @conn)
     end
 
     test "invalid_request -> 400 with a discovery challenge", %{auth: auth} do
-      {400, header, body} = Auth.challenge(auth, :invalid_request, "bad request", [], @conn)
+      {400, header, body} = Auth.challenge(auth, :invalid_request, "bad request", @conn)
       assert header =~ ~s(error="invalid_request")
       assert header =~ "resource_metadata="
       assert body.error == "invalid_request"
     end
 
     test "escapes quotes in the error description", %{auth: auth} do
-      {401, header, _} = Auth.challenge(auth, :invalid_token, ~s(a"b), [], @conn)
+      {401, header, _} = Auth.challenge(auth, :invalid_token, ~s(a"b), @conn)
       assert header =~ ~s(error_description="a\\"b")
     end
 
     test "strips CR/LF from the error description so the header stays well-formed", %{auth: auth} do
-      {401, header, _} =
-        Auth.challenge(auth, :invalid_token, "line1\r\nInjected: header", [], @conn)
+      {401, header, _} = Auth.challenge(auth, :invalid_token, "line1\r\nInjected: header", @conn)
 
       refute header =~ "\r"
       refute header =~ "\n"
@@ -489,8 +526,51 @@ defmodule Urchin.AuthTest do
 
     test "insufficient_scope falls back to scopes_supported when no scopes were resolved" do
       auth = build(scopes_supported: ["files:read", "files:write"])
-      {403, header, _} = Auth.challenge(auth, :insufficient_scope, "need more", [], @conn)
+      {403, header, _} = Auth.challenge(auth, :insufficient_scope, "need more", @conn)
       assert header =~ ~s(scope="files:read files:write")
+    end
+
+    test "a raising resource_metadata_url resolver degrades to a minimal challenge" do
+      auth = build(resource_metadata_url: fn _conn -> raise "boom" end)
+
+      log =
+        capture_log(fn ->
+          {401, header, body} = Auth.challenge(auth, :invalid_token, "bad", @conn)
+          send(self(), {:challenge, header, body})
+        end)
+
+      assert_received {:challenge, header, body}
+      assert header == ~s(Bearer error="invalid_token")
+      refute header =~ "resource_metadata="
+      assert body.error == "invalid_token"
+      assert log =~ "challenge construction failed"
+    end
+
+    test "a raising resource_metadata_url resolver still yields a bare Bearer for :missing" do
+      auth = build(resource_metadata_url: fn _conn -> raise "boom" end)
+
+      capture_log(fn ->
+        {401, header, _} = Auth.challenge(auth, :missing, "msg", @conn)
+        send(self(), {:header, header})
+      end)
+
+      assert_received {:header, header}
+      assert header == "Bearer"
+    end
+
+    test "a raising required_scopes resolver only drops the scope hint" do
+      auth = build(required_scopes: fn _conn -> raise "boom" end)
+
+      log =
+        capture_log(fn ->
+          {401, header, _} = Auth.challenge(auth, :invalid_token, "bad", @conn)
+          send(self(), {:header, header})
+        end)
+
+      assert_received {:header, header}
+      assert header =~ "resource_metadata="
+      refute header =~ "scope="
+      assert log =~ "required_scopes resolver failed during challenge"
     end
   end
 
@@ -558,6 +638,27 @@ defmodule Urchin.AuthTest do
 
       refute Claims.covers_resource?(%Claims{audience: []}, resource)
       refute Claims.covers_resource?(nil, resource)
+    end
+
+    test "covers_resource?/2 returns false for a malformed (non-list) audience" do
+      refute Claims.covers_resource?(%Claims{audience: nil}, "https://mcp.example.com/mcp")
+    end
+
+    test "from_map accepts an atom-keyed payload" do
+      claims =
+        Claims.from_map(%{
+          sub: "user-1",
+          azp: "client-1",
+          exp: 1_900_000_000,
+          aud: ["https://mcp.example.com/mcp"],
+          scope: "files:read files:write"
+        })
+
+      assert claims.subject == "user-1"
+      assert claims.client_id == "client-1"
+      assert claims.expires_at == 1_900_000_000
+      assert claims.audience == ["https://mcp.example.com/mcp"]
+      assert claims.scopes == ["files:read", "files:write"]
     end
   end
 end

@@ -53,8 +53,10 @@ defmodule Urchin.Auth do
     * `:resource_name`, `:jwks_uri`, `:resource_documentation` - optional metadata fields.
     * `:resource_metadata_url` - optional absolute URL, or `fn conn -> url end`, used in
       `WWW-Authenticate: resource_metadata`. Defaults to the RFC 9728 well-known URL for
-      `:resource`; use a resolver when a challenge must preserve tenant context such as a
-      path segment or query parameter.
+      `:resource`. Use a resolver to preserve tenant context in the challenge, e.g. by adding
+      a query parameter (`?realm=...`). The metadata document is served only at the static
+      well-known paths derived from `:resource`, so a resolver that points at a different path
+      (e.g. a per-tenant path segment) must be served by your own route or an external host.
     * `:metadata` - a map of extra RFC 9728 fields. Reserved fields managed by Urchin
       cannot be overridden.
     * `:allow_insecure_authorization_servers` - permit non-HTTPS issuer URLs (localhost is
@@ -81,6 +83,7 @@ defmodule Urchin.Auth do
     :allow_insecure_authorization_servers
   ]
   @deprecated_options [:token_validator, :audience_validation]
+  @kinds [:missing, :invalid_token, :insufficient_scope, :invalid_request, :server_error]
 
   defstruct [
     :resource,
@@ -257,10 +260,19 @@ defmodule Urchin.Auth do
   @spec authorize(t(), String.t() | nil, term()) ::
           {:ok, Claims.t()} | {:error, kind(), String.t()}
   def authorize(%__MODULE__{} = auth, token, conn) do
-    auth.authorizer
-    |> invoke_authorizer(blank_to_nil(token), auth, conn)
-    |> normalize_result()
-    |> warn_uncovered_resource(auth)
+    case blank_to_nil(token) do
+      nil ->
+        # The SDK resolves a missing/blank bearer token, never the authorizer, so the
+        # unauthenticated discovery bootstrap always gets the spec 401 challenge instead of a
+        # 500 from an authorizer that lacks a nil clause.
+        {:error, :missing, "Authorization required"}
+
+      token ->
+        auth.authorizer
+        |> invoke_authorizer(token, auth, conn)
+        |> normalize_result()
+        |> warn_uncovered_resource(auth)
+    end
   rescue
     error ->
       # A crashing authorizer must not leak internals or 200 a bad token; surface a 500.
@@ -276,12 +288,14 @@ defmodule Urchin.Auth do
   Builds the HTTP response for a failed authorization decision.
 
   Returns `{status, www_authenticate, body}` where `www_authenticate` is the header
-  string (or `nil` for 500) and `body` is the OAuth 2.0 error object.
+  string (or `nil` for 500) and `body` is the OAuth 2.0 error object. The scope hint and
+  `resource_metadata` URL are resolved here from the (possibly per-request) configuration;
+  a resolver that raises degrades the header to a minimal challenge rather than escalating
+  the response to a 500 with no `WWW-Authenticate`.
   """
-  @spec challenge(t(), kind(), String.t(), [String.t()], term()) ::
-          {100..599, String.t() | nil, map()}
-  def challenge(%__MODULE__{} = auth, kind, message, required_scopes, conn) do
-    {status_for(kind), www_authenticate(auth, kind, message, required_scopes, conn),
+  @spec challenge(t(), kind(), String.t(), term()) :: {100..599, String.t() | nil, map()}
+  def challenge(%__MODULE__{} = auth, kind, message, conn) do
+    {status_for(kind), safe_www_authenticate(auth, kind, message, conn),
      %{error: body_error_code(kind), error_description: message}}
   end
 
@@ -291,17 +305,14 @@ defmodule Urchin.Auth do
   defp invoke_authorizer({:fun, fun}, token, auth, conn), do: fun.(token, auth, conn)
 
   defp normalize_result({:ok, %Claims{} = claims}), do: {:ok, claims}
-  defp normalize_result({:ok, map}) when is_map(map), do: {:ok, Claims.from_map(map)}
+
+  # Only a plain (non-struct) map is a token payload; a foreign struct is a programming error
+  # and falls through to the unexpected-value clause instead of crashing inside from_map/1.
+  defp normalize_result({:ok, map}) when is_map(map) and not is_struct(map),
+    do: {:ok, Claims.from_map(map)}
 
   defp normalize_result({:error, kind, message})
-       when kind in [
-              :missing,
-              :invalid_token,
-              :insufficient_scope,
-              :invalid_request,
-              :server_error
-            ] and
-              is_binary(message),
+       when kind in @kinds and is_binary(message),
        do: {:error, kind, message}
 
   defp normalize_result({:error, reason}), do: map_reason(reason)
@@ -341,7 +352,7 @@ defmodule Urchin.Auth do
   defp warn_uncovered_resource({:ok, %Claims{audience: []} = claims}, _auth), do: {:ok, claims}
 
   defp warn_uncovered_resource({:ok, %Claims{} = claims}, auth) do
-    unless Claims.covers_resource?(claims, auth.resource) do
+    unless Claims.covers_resource?(claims, auth.resource_uri) do
       Logger.warning(
         "Urchin.Auth authorizer returned claims whose audience does not cover #{auth.resource}"
       )
@@ -353,6 +364,46 @@ defmodule Urchin.Auth do
   defp warn_uncovered_resource(other, _auth), do: other
 
   ## WWW-Authenticate building
+
+  # Per-request resolvers (`:resource_metadata_url`, `:required_scopes`) run while building
+  # the error response. A raised or thrown resolver must not turn a 401/403 challenge into a
+  # 500 with no header, so failures here degrade to a minimal but valid challenge.
+  defp safe_www_authenticate(auth, kind, message, conn) do
+    www_authenticate(auth, kind, message, safe_required_scopes(auth, conn), conn)
+  rescue
+    error ->
+      Logger.error("Urchin.Auth challenge construction failed: #{Exception.message(error)}")
+      minimal_challenge(kind)
+  catch
+    thrown, reason ->
+      Logger.error("Urchin.Auth challenge construction threw: #{inspect({thrown, reason})}")
+      minimal_challenge(kind)
+  end
+
+  # A failing scope resolver only costs the scope hint; keep the rest of the challenge.
+  defp safe_required_scopes(auth, conn) do
+    required_scopes(auth, conn)
+  rescue
+    error ->
+      Logger.error(
+        "Urchin.Auth :required_scopes resolver failed during challenge: #{Exception.message(error)}"
+      )
+
+      []
+  catch
+    thrown, reason ->
+      Logger.error(
+        "Urchin.Auth :required_scopes resolver threw during challenge: #{inspect({thrown, reason})}"
+      )
+
+      []
+  end
+
+  # Keep a failed challenge a valid 401/403 (never a 500 with no header) by dropping the
+  # discovery hints rather than the whole response.
+  defp minimal_challenge(:server_error), do: nil
+  defp minimal_challenge(:missing), do: "Bearer"
+  defp minimal_challenge(kind), do: build_bearer([{"error", body_error_code(kind)}])
 
   # No-credentials 401: per RFC 6750 §3.1 (and the MCP §6.1 example) the challenge omits
   # `error` when the request carried no authentication information.
@@ -429,26 +480,36 @@ defmodule Urchin.Auth do
 
   ## URI helpers
 
-  defp parse_resource!(resource) when is_binary(resource) do
-    case URI.new(resource) do
+  # Shared acceptance rule for every configured URI: an absolute http(s) URI with a
+  # non-empty host. Callers layer their own fragment/query rules and error messages on top.
+  defp parse_http_uri(value) when is_binary(value) do
+    case URI.new(value) do
       {:ok, %URI{scheme: scheme, host: host} = uri}
       when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        {:ok, uri}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp parse_http_uri(_other), do: :error
+
+  defp parse_resource!(resource) do
+    case parse_http_uri(resource) do
+      {:ok, uri} ->
         if uri.fragment, do: raise(ArgumentError, ":resource MUST NOT contain a fragment")
         uri
 
-      _ ->
+      :error ->
         raise ArgumentError,
               ":resource must be an absolute http(s) URI, got: #{inspect(resource)}"
     end
   end
 
-  defp parse_resource!(other),
-    do: raise(ArgumentError, ":resource must be a string, got: #{inspect(other)}")
-
-  defp validate_issuer!(issuer, allow_insecure) when is_binary(issuer) do
-    case URI.new(issuer) do
-      {:ok, %URI{scheme: scheme, host: host} = uri}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+  defp validate_issuer!(issuer, allow_insecure) do
+    case parse_http_uri(issuer) do
+      {:ok, uri} ->
         cond do
           uri.fragment ->
             raise ArgumentError,
@@ -458,7 +519,7 @@ defmodule Urchin.Auth do
             raise ArgumentError,
                   "authorization server #{inspect(issuer)} MUST NOT contain a query"
 
-          scheme == "http" and not (allow_insecure or localhost?(host)) ->
+          uri.scheme == "http" and not (allow_insecure or localhost?(uri.host)) ->
             raise ArgumentError,
                   "authorization server #{inspect(issuer)} must be HTTPS " <>
                     "(set allow_insecure_authorization_servers: true to override)"
@@ -467,14 +528,11 @@ defmodule Urchin.Auth do
             :ok
         end
 
-      _ ->
+      :error ->
         raise ArgumentError,
               "authorization server must be an absolute URI, got: #{inspect(issuer)}"
     end
   end
-
-  defp validate_issuer!(other, _allow_insecure),
-    do: raise(ArgumentError, "authorization server must be a string, got: #{inspect(other)}")
 
   defp resolve_authorization_servers!(fun, _allow_insecure) when is_function(fun, 1), do: fun
 
@@ -539,23 +597,19 @@ defmodule Urchin.Auth do
     end
   end
 
-  defp validate_resource_metadata_url!(url) when is_binary(url) do
-    case URI.new(url) do
-      {:ok, %URI{scheme: scheme, host: host} = uri}
-      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+  defp validate_resource_metadata_url!(url) do
+    case parse_http_uri(url) do
+      {:ok, uri} ->
         if uri.fragment,
           do: raise(ArgumentError, ":resource_metadata_url MUST NOT contain a fragment")
 
         url
 
-      _ ->
+      :error ->
         raise ArgumentError,
               ":resource_metadata_url must be an absolute http(s) URI, got: #{inspect(url)}"
     end
   end
-
-  defp validate_resource_metadata_url!(other),
-    do: raise(ArgumentError, ":resource_metadata_url must be a string, got: #{inspect(other)}")
 
   # RFC 9728 §3.1 path insertion: the well-known suffix mirrors the resource path.
   defp path_suffix(%URI{path: path}) when path in [nil, "", "/"], do: ""

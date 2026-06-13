@@ -64,14 +64,13 @@ defmodule Urchin.Auth.Plug do
 
   def authenticate(conn, %Auth{} = auth) do
     token = bearer_token(conn)
-    required = Auth.required_scopes(auth, conn)
 
     case Auth.authorize(auth, token, conn) do
       {:ok, claims} ->
         {:ok, put_private(conn, @private_key, claims)}
 
       {:error, kind, message} ->
-        {status, www_authenticate, body} = Auth.challenge(auth, kind, message, required, conn)
+        {status, www_authenticate, body} = Auth.challenge(auth, kind, message, conn)
 
         conn =
           conn

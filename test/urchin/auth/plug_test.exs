@@ -105,6 +105,24 @@ defmodule Urchin.Auth.PlugTest do
     assert Jason.decode!(conn.resp_body)["error"] == "invalid_token"
   end
 
+  test "a missing token yields 401 even when the authorizer has no nil clause" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        authorization_servers: ["https://auth.example.com"],
+        authorizer: fn token, _auth, _conn when is_binary(token) ->
+          {:ok, %Claims{subject: token, audience: ["https://mcp.example.com/mcp"]}}
+        end
+      )
+
+    conn = AuthPlug.call(conn(:post, "/mcp", ""), AuthPlug.init(auth: auth))
+
+    assert conn.halted
+    assert conn.status == 401
+    assert get_resp_header(conn, "www-authenticate") != []
+    assert Jason.decode!(conn.resp_body)["error"] == "invalid_token"
+  end
+
   test "an invalid token halts with a 401 invalid_token challenge" do
     conn = run("nope")
     assert conn.status == 401

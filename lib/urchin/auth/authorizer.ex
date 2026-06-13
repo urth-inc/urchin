@@ -7,15 +7,14 @@ defmodule Urchin.Auth.Authorizer do
     * a module implementing this behaviour (`c:authorize/3`), or
     * a 3-arity function `fn token, auth, conn -> result end`.
 
-  `authorize/3` receives the bearer token (or `nil` when no bearer token was present), the
-  `Urchin.Auth` configuration and the current request context (`Plug.Conn` in the HTTP
-  transport). It owns the full decision: token validity, issuer, expiry, audience/resource
-  binding, scopes and tenant-specific policy.
+  `authorize/3` receives the bearer token, the `Urchin.Auth` configuration and the current
+  request context (`Plug.Conn` in the HTTP transport). It owns the full decision: token
+  validity, issuer, expiry, audience/resource binding, scopes and tenant-specific policy.
 
-  Always handle a `nil` token explicitly and return `{:error, :missing}` for a missing
-  bearer token. If an authorizer only matches binary tokens and crashes on `nil`, the OAuth
-  discovery bootstrap path becomes a `500` instead of the expected `401` challenge with
-  `resource_metadata`.
+  The SDK short-circuits a missing or blank token to a `401` `:missing` challenge before
+  invoking the authorizer, so `authorize/3` is only called with a non-empty token string and
+  the OAuth discovery bootstrap path always gets the expected `401` challenge with
+  `resource_metadata`. A defensive `nil` clause is harmless but no longer required.
 
   The SDK uses the result only to either pass claims to handlers as `ctx.auth`, or to build
   the standard OAuth `WWW-Authenticate` challenge.
@@ -26,8 +25,6 @@ defmodule Urchin.Auth.Authorizer do
         @behaviour Urchin.Auth.Authorizer
 
         @impl true
-        def authorize(nil, _auth, _conn), do: {:error, :missing, "Authorization required"}
-
         def authorize(token, auth, conn) do
           with {:ok, payload} <- verify_signature_and_decode(token, conn),
                claims = Urchin.Auth.Claims.from_map(payload),
@@ -48,7 +45,7 @@ defmodule Urchin.Auth.Authorizer do
 
   @type reason ::
           :missing | :invalid_token | :expired | :invalid_audience | :insufficient_scope | term()
-  @type kind :: :missing | :invalid_token | :insufficient_scope | :invalid_request | :server_error
+  @type kind :: Auth.kind()
   @type result :: {:ok, Claims.t()} | {:error, reason()} | {:error, kind(), String.t()}
 
   @callback authorize(token :: String.t() | nil, auth :: Auth.t(), conn :: term()) :: result()
