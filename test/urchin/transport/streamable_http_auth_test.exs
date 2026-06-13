@@ -5,24 +5,30 @@ defmodule Urchin.Transport.StreamableHTTPAuthTest do
   import Plug.Conn
 
   alias Urchin.Auth
+  alias Urchin.Auth.Claims
   alias Urchin.Transport.StreamableHTTP
   alias Urchin.Test.EchoServer
 
   @auth Auth.new!(
           resource: "https://mcp.example.com/mcp",
           authorization_servers: ["https://auth.example.com"],
-          token_validator: Urchin.Test.AliceValidator
+          authorizer: Urchin.Test.AliceAuthorizer
         )
 
   @opts StreamableHTTP.init(server: EchoServer, auth: @auth)
 
-  defp post(body, headers) do
-    Enum.reduce(headers, conn(:post, "/", Jason.encode!(body)), fn {k, v}, c ->
-      put_req_header(c, k, v)
-    end)
+  defp post(body, headers, opts \\ @opts, claims \\ nil) do
+    conn =
+      Enum.reduce(headers, conn(:post, "/", Jason.encode!(body)), fn {k, v}, c ->
+        put_req_header(c, k, v)
+      end)
+
+    conn = if claims, do: put_private(conn, :urchin_auth, claims), else: conn
+
+    conn
     |> put_req_header("content-type", "application/json")
     |> put_req_header("accept", "application/json, text/event-stream")
-    |> StreamableHTTP.call(@opts)
+    |> StreamableHTTP.call(opts)
   end
 
   defp initialize(headers) do
@@ -102,5 +108,48 @@ defmodule Urchin.Transport.StreamableHTTPAuthTest do
       ])
 
     assert conn.status == 401
+  end
+
+  test "private claims reach handlers when transport auth is disabled" do
+    opts = StreamableHTTP.init(server: EchoServer)
+
+    conn =
+      post(
+        %{
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: %{
+            "protocolVersion" => "2025-11-25",
+            "capabilities" => %{},
+            "clientInfo" => %{"name" => "c", "version" => "1"}
+          }
+        },
+        [],
+        opts
+      )
+
+    assert conn.status == 200
+    [session_id] = get_resp_header(conn, "mcp-session-id")
+
+    headers = [
+      {"mcp-session-id", session_id},
+      {"mcp-protocol-version", "2025-11-25"}
+    ]
+
+    ack = post(%{jsonrpc: "2.0", method: "notifications/initialized"}, headers, opts)
+    assert ack.status == 202
+
+    conn =
+      post(
+        %{jsonrpc: "2.0", id: 2, method: "tools/call", params: %{name: "whoami", arguments: %{}}},
+        headers,
+        opts,
+        %Claims{subject: "upstream", scopes: ["external:auth"]}
+      )
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert body["result"]["content"] == [%{"type" => "text", "text" => "upstream:external:auth"}]
   end
 end

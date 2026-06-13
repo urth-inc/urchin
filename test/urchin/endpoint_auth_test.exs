@@ -11,7 +11,7 @@ defmodule Urchin.EndpointAuthTest do
   @auth Auth.new!(
           resource: "https://mcp.example.com/mcp",
           authorization_servers: ["https://auth.example.com"],
-          token_validator: Urchin.Test.RejectValidator
+          authorizer: Urchin.Test.RejectAuthorizer
         )
 
   @config Endpoint.init(server: EchoServer, path: "/mcp", auth: @auth)

@@ -11,7 +11,7 @@ defmodule Urchin.Auth.MetadataTest do
           resource: "https://mcp.example.com/mcp",
           authorization_servers: ["https://auth.example.com"],
           scopes_supported: ["files:read"],
-          token_validator: Urchin.Test.RejectValidator
+          authorizer: Urchin.Test.RejectAuthorizer
         )
 
   @config Metadata.init(auth: @auth)
@@ -37,6 +37,35 @@ defmodule Urchin.Auth.MetadataTest do
     conn = request(:get, "/.well-known/oauth-protected-resource")
     assert conn.status == 200
     assert Jason.decode!(conn.resp_body)["resource"] == "https://mcp.example.com/mcp"
+  end
+
+  test "resolves authorization servers from the request connection" do
+    auth =
+      Auth.new!(
+        resource: "https://mcp.example.com/mcp",
+        authorization_servers: fn conn ->
+          realm = URI.decode_query(conn.query_string)["realm"]
+          ["https://auth.example.com/realms/#{realm}"]
+        end,
+        authorizer: Urchin.Test.RejectAuthorizer
+      )
+
+    config = Metadata.init(auth: auth)
+
+    conn =
+      conn(:get, "/.well-known/oauth-protected-resource/mcp?realm=tenant-a")
+      |> Metadata.call(config)
+
+    assert conn.status == 200
+
+    assert Jason.decode!(conn.resp_body)["authorization_servers"] == [
+             "https://auth.example.com/realms/tenant-a"
+           ]
+  end
+
+  test "marks dynamic metadata responses as uncacheable" do
+    conn = request(:get, "/.well-known/oauth-protected-resource/mcp")
+    assert ["no-store"] = get_resp_header(conn, "cache-control")
   end
 
   test "responds to the metadata document with permissive CORS" do

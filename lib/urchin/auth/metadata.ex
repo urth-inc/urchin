@@ -50,7 +50,7 @@ defmodule Urchin.Auth.Metadata do
   @doc "Returns true when the request targets the Protected Resource Metadata endpoint."
   @spec metadata_request?(Plug.Conn.t(), Auth.t()) :: boolean()
   def metadata_request?(conn, %Auth{} = auth) do
-    conn.request_path in Auth.well_known_paths(auth)
+    conn.request_path in Auth.well_known_paths(auth, conn)
   end
 
   @doc """
@@ -62,19 +62,22 @@ defmodule Urchin.Auth.Metadata do
   def serve(%{method: method} = conn, %Auth{} = auth) when method in ["GET", "HEAD"] do
     conn
     |> put_cors()
+    |> put_cache_control()
     |> put_resp_content_type("application/json")
-    |> send_resp(200, Jason.encode!(Auth.metadata_document(auth)))
+    |> send_resp(200, Jason.encode!(Auth.metadata_document(auth, conn)))
   end
 
   def serve(%{method: "OPTIONS"} = conn, _auth) do
     conn
     |> put_cors()
+    |> put_cache_control()
     |> send_resp(204, "")
   end
 
   def serve(conn, _auth) do
     conn
     |> put_cors()
+    |> put_cache_control()
     |> put_resp_header("allow", "GET, OPTIONS")
     |> put_resp_content_type("application/json")
     |> send_resp(
@@ -92,5 +95,9 @@ defmodule Urchin.Auth.Metadata do
     |> put_resp_header("access-control-allow-origin", "*")
     |> put_resp_header("access-control-allow-methods", "GET, OPTIONS")
     |> put_resp_header("access-control-allow-headers", "Authorization, Content-Type")
+  end
+
+  defp put_cache_control(conn) do
+    put_resp_header(conn, "cache-control", "no-store")
   end
 end
