@@ -35,22 +35,33 @@ defmodule Urchin.Auth.Claims do
         }
 
   @doc """
-  Builds a `Claims` struct from a decoded token payload (string-keyed map).
+  Builds a `Claims` struct from a decoded token payload (string- or atom-keyed map).
 
   Recognized fields: `sub`, `client_id`/`azp`, `exp`, `aud` (string or list),
-  `scope` (space-delimited string) and/or `scp`/`scopes` (string or list). The full
-  payload is preserved under `:claims` for custom checks.
+  `scope` (space-delimited string) and/or `scp`/`scopes` (string or list). JWT and RFC 7662
+  payloads are string-keyed, but an authorizer that hand-builds an atom-keyed map is also
+  accepted. The full payload is preserved under `:claims` for custom checks.
   """
   @spec from_map(map()) :: t()
   def from_map(payload) when is_map(payload) do
     %__MODULE__{
-      subject: payload["sub"],
-      client_id: payload["client_id"] || payload["azp"],
-      expires_at: normalize_exp(payload["exp"]),
+      subject: get_field(payload, "sub", :sub),
+      client_id: get_field(payload, "client_id", :client_id) || get_field(payload, "azp", :azp),
+      expires_at: normalize_exp(get_field(payload, "exp", :exp)),
       scopes: extract_scopes(payload),
-      audience: normalize_list(payload["aud"]),
+      audience: normalize_list(get_field(payload, "aud", :aud)),
       claims: payload
     }
+  end
+
+  # Token payloads come string-keyed from JSON decoding, but accept the atom-keyed form an
+  # authorizer might build by hand so its claims are not silently dropped.
+  defp get_field(payload, string_key, atom_key) do
+    case payload do
+      %{^string_key => value} -> value
+      %{^atom_key => value} -> value
+      _ -> nil
+    end
   end
 
   @doc "Returns true when the claims grant the given scope."
@@ -86,6 +97,9 @@ defmodule Urchin.Auth.Claims do
       :error -> false
     end
   end
+
+  # A malformed (non-list) audience covers nothing rather than crashing the caller.
+  def covers_resource?(%__MODULE__{}, _resource), do: false
 
   def covers_resource?(nil, _resource), do: false
 
@@ -142,7 +156,11 @@ defmodule Urchin.Auth.Claims do
   # OAuth and JWT carry scopes under several names: a space-delimited "scope" string
   # (RFC 6749 / 7662), or "scp"/"scopes" as either a list or a string.
   defp extract_scopes(payload) do
-    [payload["scope"], payload["scp"], payload["scopes"]]
+    [
+      get_field(payload, "scope", :scope),
+      get_field(payload, "scp", :scp),
+      get_field(payload, "scopes", :scopes)
+    ]
     |> Enum.flat_map(&split_scope/1)
     |> Enum.uniq()
   end
