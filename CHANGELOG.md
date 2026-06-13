@@ -42,7 +42,10 @@ details and how to adapt.
   Metadata. Token audience/resource binding is owned by the configured authorizer.
 - Per-request OAuth protected resource metadata URL resolution via `resource_metadata_url:
   fn conn -> url end`, allowing `WWW-Authenticate` challenges to preserve tenant context
-  such as path or query data for the follow-up metadata request.
+  (e.g. a `?realm=...` query parameter) for the follow-up metadata request. The discovery
+  document is served only at the static well-known paths derived from `:resource`; a resolver
+  that points at a different path (e.g. a per-tenant path segment) must be served by your own
+  route or an external host.
 
 ### Changed
 
@@ -93,7 +96,10 @@ breaking relative to `0.2.0`.
   `Urchin.Auth.Authorizer` (`authorize/3`) or 3-arity function. Urchin extracts bearer
   tokens, serves metadata, builds `WWW-Authenticate` challenges and passes claims to
   handlers; token validity, expiry, issuer, audience/resource binding, scopes and tenant
-  policy are owned by the authorizer.
+  policy are owned by the authorizer. A missing or blank token is resolved by Urchin to a
+  `401` `:missing` challenge before the authorizer runs, so the authorizer is only invoked
+  with a non-empty token and the unauthenticated discovery bootstrap always gets the spec
+  challenge.
 - **BREAKING / SECURITY:** Urchin no longer performs SDK-level expiry, audience/resource
   binding or request-scope enforcement after a token callback succeeds. Migrating
   applications must implement those checks inside their authorizer (for example using
@@ -101,7 +107,9 @@ breaking relative to `0.2.0`.
 - `Urchin.Auth.new!/1` now rejects removed options such as `:token_validator` and
   `:audience_validation`, and rejects unknown options instead of silently ignoring them.
 - `Urchin.Auth.Authorizer` may return `{:ok, map}` for migration compatibility; Urchin
-  normalizes the map through `Urchin.Auth.Claims.from_map/1`.
+  normalizes the map (string- or atom-keyed) through `Urchin.Auth.Claims.from_map/1`. A
+  foreign struct returned in `{:ok, ...}` is reported as a server error rather than crashing
+  the authorization pipeline.
 - Authorization server issuer URLs now reject query strings in addition to fragments.
 - Extra `:metadata` fields may no longer override fields owned by Urchin, such as
   `resource` and `authorization_servers`.
@@ -111,6 +119,11 @@ breaking relative to `0.2.0`.
 
 - README no longer claims unqualified "resumable SSE streams"; resumption is scoped to the
   GET stream, matching the implementation.
+- A per-request `:resource_metadata_url` or `:required_scopes` resolver that raises while a
+  `WWW-Authenticate` challenge is being built no longer escalates the `401`/`403` into a
+  `500` with no challenge; the challenge degrades to a valid header without the failed hint,
+  and the failure is logged. The scope hint is also resolved only when a challenge is built,
+  not on every successful request.
 
 ## [0.2.0] - 2026-06-05
 

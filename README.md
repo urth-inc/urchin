@@ -265,10 +265,14 @@ auth =
 ```
 
 For realm-aware deployments, `authorization_servers` may also be `fn conn -> [issuer] end`;
-the metadata endpoint resolves it per request. If tenant context is carried in a path segment
-or query string, configure `resource_metadata_url: fn conn -> url end` so the `401`
-challenge points clients to a metadata URL that preserves that context.
-Validate any tenant identifier before using it to build issuer or metadata URLs.
+the metadata endpoint resolves it per request. To carry tenant context into the `401`
+challenge, configure `resource_metadata_url: fn conn -> url end` so the challenge points
+clients to a metadata URL that preserves that context — typically by adding a query string
+(`?realm=...`). Urchin serves the discovery document only at the static well-known paths
+derived from `:resource`, so a resolver that changes the *path* (e.g. a per-tenant path
+segment) must be served by your own route or an external host; the built-in metadata
+endpoint will not answer it. Validate any tenant identifier before using it to build issuer
+or metadata URLs.
 
 The standalone runner serves the discovery document for you, at
 `https://mcp.example.com/.well-known/oauth-protected-resource/mcp`:
